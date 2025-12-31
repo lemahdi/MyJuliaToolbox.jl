@@ -1,8 +1,9 @@
 # Date utilities for MyJuliaToolbox
 
 using Dates
+using DataFrames
 
-export date2int, int2date, days_between, yearfrac
+export date2int, int2date, days_between, yearfrac, add_days_convention
 
 """
     date2int(d::Date) -> Int
@@ -85,34 +86,153 @@ function _days_30_360_isda(d1::Date, d2::Date)::Int
     # Note: ISDA has subtle rules around end-of-February; this uses US rules as a practical approximation.
     return _days_30_360_us(d1, d2)
 end
-function yearfrac(i1::Integer, i2::Integer; basis::Symbol = :actual365)::Float64
-    if basis in (:thirty360, Symbol("30/360"), Symbol("30_360"), :thirty360_us, :thirty360_nasd, :thirty360_us_nasd)
-        d1 = int2date(i1)
-        d2 = int2date(i2)
-        days = _days_30_360_us(d1, d2)
-        return days / 360.0
-    elseif basis in (:thirty360_eu, Symbol("30E/360"), Symbol("30_E_360"), Symbol("30_360_eu"))
-        d1 = int2date(i1)
-        d2 = int2date(i2)
-        days = _days_30_360_eu(d1, d2)
-        return days / 360.0
-    elseif basis == :thirty360_isda || basis == Symbol("30_360_isda")
-        d1 = int2date(i1)
-        d2 = int2date(i2)
-        days = _days_30_360_isda(d1, d2)
-        return days / 360.0
-    end
 
-    days = days_between(i1, i2)
+function yearfrac(i1::Integer, i2::Integer; basis::Symbol = :actual365)::Float64
+    d1 = int2date(i1)
+    d2 = int2date(i2)
+    days = Dates.value(d2 - d1)
+
     if basis == :actual365
-        return days / 365.0
+        return days / 365
     elseif basis == :actual365_25
         return days / 365.25
     elseif basis == :actual360
-        return days / 360.0
+        return days / 360
     elseif basis == :actual
         return days / 365.2425
+    elseif basis == :thirty360 || basis == Symbol("30/360") || basis == Symbol("30_360")
+        return _days_30_360_us(d1, d2) / 360
+    elseif basis == :thirty360_eu || basis == Symbol("30E/360")
+        return _days_30_360_eu(d1, d2) / 360
+    elseif basis == :thirty360_isda
+        return _days_30_360_isda(d1, d2) / 360
     else
-        error("Unsupported basis: $basis. Supported: :actual365, :actual365_25, :actual360, :actual, :thirty360 (or :30_360 / :'30/360')")
+        throw(ErrorException("Unknown basis: $basis"))
     end
 end
+
+# helper: robust conversion to Date
+function _to_date(x)
+    if x isa Date
+        return x
+    elseif x isa Integer
+        return int2date(x)
+    elseif x isa AbstractString
+        try
+            return Date(x)
+        catch
+            throw(ErrorException("Cannot parse string to Date: $x"))
+        end
+    else
+        try
+            return Date(x)
+        catch
+            throw(ErrorException("Cannot convert value of type $(typeof(x)) to Date"))
+        end
+    end
+end
+function _is_business_day(d::Date, weekends::AbstractVector{Int}, calendar::AbstractSet{Date}, calendar_is_business::Bool)::Bool
+    # `calendar_is_business == true` means `calendar` lists business days (membership => business)
+    # otherwise `calendar` lists holidays (membership => non-business)
+    wd = dayofweek(d) # 1=Mon .. 7=Sun
+    if wd in weekends
+        return false
+    end
+    if calendar_is_business
+        return d in calendar
+    else
+        return !(d in calendar)
+    end
+end
+
+function _adjust_following(d::Date, weekends::AbstractVector{Int}, calendar::AbstractSet{Date}, calendar_is_business::Bool)::Date
+    dd = d
+    while !_is_business_day(dd, weekends, calendar, calendar_is_business)
+        dd += Day(1)
+    end
+    return dd
+end
+
+function _adjust_previous(d::Date, weekends::AbstractVector{Int}, calendar::AbstractSet{Date}, calendar_is_business::Bool)::Date
+    dd = d
+    while !_is_business_day(dd, weekends, calendar, calendar_is_business)
+        dd -= Day(1)
+    end
+    return dd
+end
+
+"""
+    add_days_convention(d::Date, delta::Integer; convention::Symbol=:following, weekends=[6,7], holidays=Date[])
+
+Add `delta` calendar days to `d` and adjust the resulting date according to `convention`.
+Supported conventions: `:following`, `:modified_following`, `:previous`, `:modified_previous`.
+- `:following`: move forward to the next business day
+- `:modified_following`: following, unless it moves to the next month, then use previous business day
+- `:previous`: move backward to the previous business day
+- `:modified_previous`: previous, unless it moves to the previous month, then use following business day
+
+`weekends` expects an array of integer weekday numbers (1=Mon .. 7=Sun), default `[6,7]`.
+`holidays` is an array of `Date`s to treat as non-business days.
+"""
+function add_days_convention(d::Date, delta::Integer; convention::Symbol=:following, weekends::AbstractVector{Int} = [6,7], holidays=Date[])::Date
+    # Normalize `holidays` which can be:
+    # - a Vector{Date} listing holidays (membership => non-business)
+    # - a Set{Date} listing holidays
+    # - a DataFrame with a `:ref_dt` column that *lists business days* (membership => business)
+    calendar_is_business = false
+    calset = Set{Date}()
+
+    if holidays isa DataFrame
+        # try symbol column name first, then string name for robustness
+        if :ref_dt in names(holidays)
+            col = holidays[!, :ref_dt]
+        elseif "ref_dt" in names(holidays)
+            col = holidays[!, "ref_dt"]
+        else
+            error("calendar DataFrame must contain a :ref_dt column of Date or integer yyyymmdd values")
+        end
+        for r in col
+            push!(calset, _to_date(r))
+        end
+        calendar_is_business = true
+    elseif holidays === Date[] || (isa(holidays, AbstractVector) && isempty(holidays))
+        calset = Set{Date}()
+        calendar_is_business = false
+    else
+        # holidays may be a Vector/Set/Iterable of integers or Dates
+        try
+            for r in holidays
+                push!(calset, _to_date(r))
+            end
+            calendar_is_business = false
+        catch
+            error("Unsupported holidays type: $(typeof(holidays)). Expect Vector/Set of Date or integer yyyymmdd, or DataFrame with :ref_dt.")
+        end
+    end
+
+    unadjusted = d + Day(delta)
+
+    if convention == :following
+        return _adjust_following(unadjusted, weekends, calset, calendar_is_business)
+    elseif convention == :modified_following
+        adj = _adjust_following(unadjusted, weekends, calset, calendar_is_business)
+        if month(adj) != month(unadjusted)
+            return _adjust_previous(unadjusted, weekends, calset, calendar_is_business)
+        else
+            return adj
+        end
+    elseif convention == :previous || convention == :preceding
+        return _adjust_previous(unadjusted, weekends, calset, calendar_is_business)
+    elseif convention == :modified_previous || convention == :modified_preceding
+        adj = _adjust_previous(unadjusted, weekends, calset, calendar_is_business)
+        if month(adj) != month(unadjusted)
+            return _adjust_following(unadjusted, weekends, calset, calendar_is_business)
+        else
+            return adj
+        end
+    else
+        error("Unsupported convention: $convention. Supported: :following, :modified_following, :previous, :modified_previous")
+    end
+end
+
+# end of file

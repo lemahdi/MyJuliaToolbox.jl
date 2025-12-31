@@ -1,6 +1,7 @@
 using MyJuliaToolbox
 using Test
 using Dates
+using DataFrames
 
 @testset "Dates utils" begin
     @test date2int(Date(2025,12,31)) == 20251231
@@ -41,4 +42,29 @@ using Dates
 
     # ISDA variant (alias to US implementation for now)
     @test isapprox(yearfrac(20250115, 20250215, basis=:thirty360_isda), 30/360; atol=1e-12)
+
+    # business day adjustment: following / previous / modified variants
+    d = Date(2021,1,31) # Sunday
+    @test add_days_convention(d, 0, convention=:following) == Date(2021,2,1)    # following -> Mon Feb 1
+    @test add_days_convention(d, 0, convention=:modified_following) == Date(2021,1,29) # modified following -> previous business day (Jan 29)
+    @test add_days_convention(d, 0, convention=:previous) == Date(2021,1,29)
+    @test add_days_convention(d, 0, convention=:modified_previous) == Date(2021,1,29) # modified previous -> previous business day (Jan 29)
+
+    # adding across month boundary with non-zero delta
+    d2 = Date(2021,1,30) # Saturday
+    @test add_days_convention(d2, 1, convention=:following) == Date(2021,2,1) # unadjusted = Feb 1 (Mon)
+    @test add_days_convention(d2, 1, convention=:modified_following) == Date(2021,1,29) # modified following moves back
+
+    # holidays support: treat a date as holiday and skip (vector form)
+    d3 = Date(2025,12,24) # assume Wed
+    holidays = [Date(2025,12,24), Date(2025,12,25)]
+    @test add_days_convention(d3, 0, convention=:following, holidays=holidays) == Date(2025,12,26)
+
+    # holidays as integer yyyymmdd values
+    holidays_int = [20251224, 20251225]
+    @test add_days_convention(d3, 0, convention=:following, holidays=holidays_int) == Date(2025,12,26)
+
+    # calendar DataFrame form: a calendar listing *business* days via :ref_dt (integers)
+    cal_df = DataFrame(ref_dt = [20251226])
+    @test add_days_convention(d3, 0, convention=:following, holidays=cal_df) == Date(2025,12,26)
 end
