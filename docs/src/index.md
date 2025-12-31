@@ -54,4 +54,30 @@ yearfrac(20250115, 20250215, basis=:thirty360)
 yearfrac(20250131, 20250331, basis=:thirty360_eu)
 ```
 
+### Business-day adjustments and calendars
+
+`add_days_convention(d::Date, delta::Integer; convention::Symbol=:following, weekends=[6,7], holidays=Date[])` adds `delta` calendar days and adjusts the result according to the chosen business-day convention. Supported conventions: `:following`, `:modified_following`, `:previous`, `:modified_previous`.
+
+- `weekends` expects an array of weekday numbers (1=Mon .. 7=Sun), default `[6,7]` (Sat/Sun).
+- `holidays` may be provided in multiple forms:
+  - a `Vector` or `Set` of `Date` values or integer `yyyymmdd` values (membership => non-business holidays), or
+  - a `DataFrame` with a `:ref_dt` column that **lists business days** (membership => business days). The `:ref_dt` column may contain `Date` values or integers in `yyyymmdd` form.
+
+Examples:
+
+```julia
+using MyJuliaToolbox, DataFrames, Dates
+
+# move 0 days and apply following convention (roll forward to next business day)
+d = Date(2025,12,24)  # Wed
+add_days_convention(d, 0, convention=:following)
+
+# provide holidays as integers
+add_days_convention(d, 0, convention=:following, holidays=[20251224, 20251225])
+
+# pass a calendar DataFrame that lists business days (ref_dt column)
+cal = DataFrame(ref_dt = [20251226])  # integers or Dates accepted
+add_days_convention(d, 0, convention=:following, holidays=cal)
+```
+
 For API details see the API page.
