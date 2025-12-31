@@ -54,7 +54,7 @@ Compute the year fraction between two integer dates (`yyyymmdd`) according to `b
 
 Returns a signed floating-point year fraction (positive if `i2 > i1`).
 """
-function _days_30_360(d1::Date, d2::Date)::Int
+function _days_30_360_us(d1::Date, d2::Date)::Int
     # 30/360 US (NASD) convention
     y1, m1, day1 = year(d1), month(d1), day(d1)
     y2, m2, day2 = year(d2), month(d2), day(d2)
@@ -69,11 +69,37 @@ function _days_30_360(d1::Date, d2::Date)::Int
     return 360 * (y2 - y1) + 30 * (m2 - m1) + (d2p - d1p)
 end
 
+function _days_30_360_eu(d1::Date, d2::Date)::Int
+    # 30E/360 (European) convention: any 31st day becomes 30
+    y1, m1, day1 = year(d1), month(d1), day(d1)
+    y2, m2, day2 = year(d2), month(d2), day(d2)
+
+    d1p = min(day1, 30)
+    d2p = min(day2, 30)
+
+    return 360 * (y2 - y1) + 30 * (m2 - m1) + (d2p - d1p)
+end
+
+function _days_30_360_isda(d1::Date, d2::Date)::Int
+    # ISDA variant approximate implementation: align with US/NASD rules for simplicity
+    # Note: ISDA has subtle rules around end-of-February; this uses US rules as a practical approximation.
+    return _days_30_360_us(d1, d2)
+end
 function yearfrac(i1::Integer, i2::Integer; basis::Symbol = :actual365)::Float64
-    if basis in (:thirty360, Symbol("30/360"), Symbol("30_360"))
+    if basis in (:thirty360, Symbol("30/360"), Symbol("30_360"), :thirty360_us, :thirty360_nasd, :thirty360_us_nasd)
         d1 = int2date(i1)
         d2 = int2date(i2)
-        days = _days_30_360(d1, d2)
+        days = _days_30_360_us(d1, d2)
+        return days / 360.0
+    elseif basis in (:thirty360_eu, Symbol("30E/360"), Symbol("30_E_360"), Symbol("30_360_eu"))
+        d1 = int2date(i1)
+        d2 = int2date(i2)
+        days = _days_30_360_eu(d1, d2)
+        return days / 360.0
+    elseif basis == :thirty360_isda || basis == Symbol("30_360_isda")
+        d1 = int2date(i1)
+        d2 = int2date(i2)
+        days = _days_30_360_isda(d1, d2)
         return days / 360.0
     end
 

@@ -34,4 +34,11 @@ using Dates
     # accept different symbol forms
     @test isapprox(yearfrac(20250115, 20250215, basis=Symbol("30/360")), 30/360; atol=1e-12)
     @test isapprox(yearfrac(20250115, 20250215, basis=Symbol("30_360")), 30/360; atol=1e-12)
+
+    # thirty/360 European (30E/360)
+    @test isapprox(yearfrac(20250131, 20250331, basis=:thirty360_eu), 60/360; atol=1e-12)
+    @test isapprox(yearfrac(20250131, 20250331, basis=Symbol("30E/360")), 60/360; atol=1e-12)
+
+    # ISDA variant (alias to US implementation for now)
+    @test isapprox(yearfrac(20250115, 20250215, basis=:thirty360_isda), 30/360; atol=1e-12)
 end
