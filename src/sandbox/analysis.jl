@@ -40,7 +40,8 @@ end
 function describe_df(df::DataFrame; n::Integer=5)
     println("Rows: $(nrow(df)), Columns: $(ncol(df))")
     println("Column types and missing counts:")
-    for (nm, tp) in zip(names(df), eltypes(df))
+    types = map(eltype, eachcol(df))
+    for (nm, tp) in zip(names(df), types)
         miss = count(ismissing, df[!, nm])
         println(" - $(nm) :: $(tp) | missing=$(miss)")
     end
