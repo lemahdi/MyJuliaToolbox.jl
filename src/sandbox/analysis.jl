@@ -3,6 +3,7 @@
 
 using Dates
 using DataFrames
+using Statistics
 using MyJuliaToolbox
 
 # Example helper that uses MyJuliaToolbox if available
@@ -37,13 +38,71 @@ function load_wb_hcp(path::AbstractString = WB_CSV_PATH)
 end
 
 # Describe a DataFrame succinctly for quick inspection
+function _col_stats(col)
+    T = eltype(col)
+    nmiss = count(ismissing, col)
+    nn = length(col) - nmiss
+    if T <: Number && nn > 0
+        vals = skipmissing(col)
+        return Dict(
+            :type=>T,
+            :nmissing=>nmiss,
+            :count=>nn,
+            :mean=>mean(vals),
+            :min=>minimum(vals),
+            :median=>median(collect(vals)),
+            :max=>maximum(vals)
+        )
+    else
+        # categorical or all-missing
+        uniq = length(unique(skipmissing(col)))
+        top = try
+            first(sort(collect(freqtable(skipmissing(col))), by=x->-x[2])[1])[1]
+        catch
+            missing
+        end
+        return Dict(:type=>T, :nmissing=>nmiss, :count=>nn, :unique=>uniq, :top=>top)
+    end
+end
+
 function describe_df(df::DataFrame; n::Integer=5)
     println("Rows: $(nrow(df)), Columns: $(ncol(df))")
-    println("Column types and missing counts:")
+
+    println("\nColumn summary:")
+    names_ = names(df)
     types = map(eltype, eachcol(df))
-    for (nm, tp) in zip(names(df), types)
-        miss = count(ismissing, df[!, nm])
-        println(" - $(nm) :: $(tp) | missing=$(miss)")
+    for (nm, tp) in zip(names_, types)
+        col = df[!, nm]
+        nmiss = count(ismissing, col)
+        print(" - $(nm) :: $(tp) | missing=$(nmiss)")
+        if tp <: Number
+            nnonmissing = count(x->!ismissing(x), col)
+            if nnonmissing > 0
+                vals = skipmissing(col)
+                print(" | mean=$(mean(vals)), min=$(minimum(vals)), median=$(median(collect(vals))), max=$(maximum(vals))")
+            end
+        else
+            # show top and unique counts
+            uniq = length(unique(skipmissing(col)))
+            # compute modal value without external deps
+            counts = Dict{Any, Int}()
+            for v in skipmissing(col)
+                counts[v] = get(counts, v, 0) + 1
+            end
+            top = isempty(counts) ? missing : begin
+                bestk = first(keys(counts))
+                bestv = counts[bestk]
+                for (k,v) in counts
+                    if v > bestv
+                        bestk = k
+                        bestv = v
+                    end
+                end
+                bestk
+            end
+            print(" | unique=$(uniq), top=$(top)")
+        end
+        println()
     end
 
     println("\nSummary (describe):")
