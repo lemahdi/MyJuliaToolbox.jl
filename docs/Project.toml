@@ -1,0 +1,9 @@
+name = "MyJuliaToolboxDocs"
+uuid = "d6a7a4b2-0000-4000-8000-000000000001"
+
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+MyJuliaToolbox = "fd9695c5-3c1a-4f9c-9f45-4538fac14557"
+
+[compat]
+julia = "1.10"

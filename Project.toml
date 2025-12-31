@@ -1,9 +1,25 @@
 name = "MyJuliaToolbox"
 uuid = "fd9695c5-3c1a-4f9c-9f45-4538fac14557"
-authors = ["Mahdi Akkouh"]
 version = "1.0.0-DEV"
+authors = ["Mahdi Akkouh"]
+
+[deps]
+Arrow = "69666777-d1a9-59fb-9406-91d4454c9d45"
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+DataFramesMeta = "1313f7d8-7da2-5740-9ea0-a2ca25f37964"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
 
 [compat]
+Arrow = "2.8.0"
+CSV = "0.10.15"
+CodecZlib = "0.7.8"
+DataFrames = "1.8.1"
+DataFramesMeta = "0.15.6"
+Dates = "1.11.0"
+Tables = "1.12.1"
 julia = "1.10.10"
 
 [extras]
