@@ -16,7 +16,7 @@ include("utils.jl")
 
 # Re-export commonly-used IO helpers at top level for convenience
 using .IO: read_dataframe, write_dataframe, read_csv_to_df, read_arrow_to_df
-using .Utils: date2int, int2date, days_between
-export read_dataframe, write_dataframe, read_csv_to_df, read_arrow_to_df, date2int, int2date, days_between
+using .Utils: date2int, int2date, days_between, yearfrac
+export read_dataframe, write_dataframe, read_csv_to_df, read_arrow_to_df, date2int, int2date, days_between, yearfrac
 
 end

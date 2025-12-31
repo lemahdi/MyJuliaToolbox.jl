@@ -2,7 +2,7 @@
 
 using Dates
 
-export date2int, int2date, days_between
+export date2int, int2date, days_between, yearfrac
 
 """
     date2int(d::Date) -> Int
@@ -41,4 +41,52 @@ function days_between(i1::Integer, i2::Integer)::Int
     d1 = int2date(i1)
     d2 = int2date(i2)
     return Dates.value(d2 - d1)
+end
+
+"""
+    yearfrac(i1::Integer, i2::Integer; basis=:actual365) -> Float64
+
+Compute the year fraction between two integer dates (`yyyymmdd`) according to `basis`:
+- `:actual365` (default): days / 365
+- `:actual365_25`: days / 365.25
+- `:actual360`: days / 360
+- `:actual`: days / 365.2425 (approx. Gregorian mean)
+
+Returns a signed floating-point year fraction (positive if `i2 > i1`).
+"""
+function _days_30_360(d1::Date, d2::Date)::Int
+    # 30/360 US (NASD) convention
+    y1, m1, day1 = year(d1), month(d1), day(d1)
+    y2, m2, day2 = year(d2), month(d2), day(d2)
+
+    d1p = day1 == 31 ? 30 : day1
+    if day2 == 31 && d1p == 30
+        d2p = 30
+    else
+        d2p = min(day2, 30)
+    end
+
+    return 360 * (y2 - y1) + 30 * (m2 - m1) + (d2p - d1p)
+end
+
+function yearfrac(i1::Integer, i2::Integer; basis::Symbol = :actual365)::Float64
+    if basis in (:thirty360, Symbol("30/360"), Symbol("30_360"))
+        d1 = int2date(i1)
+        d2 = int2date(i2)
+        days = _days_30_360(d1, d2)
+        return days / 360.0
+    end
+
+    days = days_between(i1, i2)
+    if basis == :actual365
+        return days / 365.0
+    elseif basis == :actual365_25
+        return days / 365.25
+    elseif basis == :actual360
+        return days / 360.0
+    elseif basis == :actual
+        return days / 365.2425
+    else
+        error("Unsupported basis: $basis. Supported: :actual365, :actual365_25, :actual360, :actual, :thirty360 (or :30_360 / :'30/360')")
+    end
 end
