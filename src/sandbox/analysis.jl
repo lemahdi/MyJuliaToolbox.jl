@@ -37,6 +37,47 @@ function load_wb_hcp(path::AbstractString = WB_CSV_PATH)
     end
 end
 
+# Detect and remove constant columns
+"""remove_constant_columns(df; inplace=false)
+Detect columns whose non-missing values are constant (1 unique value) or entirely missing.
+Prints the columns and their representative value and returns a tuple `(df_pruned, removed_dict)`.
+If `inplace=true`, modifies `df` in-place and returns it.
+"""
+function remove_constant_columns(df::DataFrame; inplace::Bool=false)
+    removed = Dict{Symbol, Any}()
+    for nm in names(df)
+        col = df[!, nm]
+        nm_sym = nm isa Symbol ? nm : Symbol(nm)
+        uniq = collect(unique(skipmissing(col)))
+        if length(uniq) == 1
+            removed[nm_sym] = uniq[1]
+        elseif length(uniq) == 0
+            # column entirely missing
+            removed[nm_sym] = missing
+        end
+    end
+
+    if isempty(removed)
+        println("No constant columns found.")
+        return df, removed
+    end
+
+    println("Removing $(length(removed)) constant columns:")
+    for (k, v) in removed
+        println(" - $(k) = $(v)")
+    end
+
+    if inplace
+        select!(df, Not(collect(keys(removed))))
+        return df, removed
+    else
+        keep_sym = setdiff(Symbol.(names(df)), collect(keys(removed)))
+        # preserve original column order
+        keep = [s for s in names(df) if Symbol(s) in keep_sym]
+        return df[:, keep], removed
+    end
+end
+
 # Describe a DataFrame succinctly for quick inspection
 function _col_stats(col)
     T = eltype(col)
@@ -118,6 +159,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
     # Attempt to load the WB CSV
     df = load_wb_hcp()
     if nrow(df) > 0
+        df, removed = remove_constant_columns(df)
+        if !isempty(removed)
+            println("Removed columns: ", join(string.(keys(removed)), ", "))
+        end
         describe_df(df)
     else
         println("No data loaded from $WB_CSV_PATH")
