@@ -5,3 +5,6 @@ include("io/csv-tests.jl")
 include("io/arrow-tests.jl")
 include("io/factory-tests.jl")
 
+# utils tests
+include("utils/dates-tests.jl")
+
