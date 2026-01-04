@@ -1,0 +1,1 @@
+﻿{ title:docs: add calendar example and sandbox analysis improvements,head:docs/add-calendar-example,base:main,body:Adds a docs example showing calendar DataFrame / integer yyyymmdd usage for add_days_convention. Also improves src/sandbox/analysis.jl with a robust describe_df and remove_constant_columns helper. Includes tests and minor fixes.}

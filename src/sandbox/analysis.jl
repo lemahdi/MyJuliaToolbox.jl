@@ -3,8 +3,10 @@
 
 using Dates
 using DataFrames
+using DataFramesMeta
 using Statistics
 using MyJuliaToolbox
+using Pipe
 
 # Example helper that uses MyJuliaToolbox if available
 function example_shift(d::Date = Date(2025,12,31))
@@ -166,52 +168,51 @@ if abspath(PROGRAM_FILE) == @__FILE__
         
         # Create indicator_df with unique INDICATOR and INDICATOR_LABEL combinations before removing column
         println("\n\nCreating unique indicators dataframe...")
-        indicator_df = unique(wb_hcp_df[:, [:INDICATOR, :INDICATOR_LABEL]])
+        indicator_df = @pipe wb_hcp_df |> @select(_, :INDICATOR, :INDICATOR_LABEL) |> unique(_)
         println("Unique indicators: $(nrow(indicator_df))")
         println("\nFirst 10 unique indicators:")
         show(first(indicator_df, 10))
         
         # Create ref_area_df with unique REF_AREA and REF_AREA_LABEL combinations before removing column
         println("\n\nCreating unique reference areas dataframe...")
-        ref_area_df = unique(wb_hcp_df[:, [:REF_AREA, :REF_AREA_LABEL]])
+        ref_area_df = @pipe wb_hcp_df |> @select(_, :REF_AREA, :REF_AREA_LABEL) |> unique(_)
         println("Unique reference areas: $(nrow(ref_area_df))")
         println("\nFirst 10 unique reference areas:")
         show(first(ref_area_df, 10))
         
         # Create sex_df with unique SEX and SEX_LABEL combinations before removing column
         println("\n\nCreating unique sex categories dataframe...")
-        sex_df = unique(wb_hcp_df[:, [:SEX, :SEX_LABEL]])
+        sex_df = @pipe wb_hcp_df |> @select(_, :SEX, :SEX_LABEL) |> unique(_)
         println("Unique sex categories: $(nrow(sex_df))")
         println("\nSex categories:")
         show(sex_df)
         
         # Create unit_measure_df with unique UNIT_MEASURE and UNIT_MEASURE_LABEL combinations before removing column
         println("\n\nCreating unique unit measures dataframe...")
-        unit_measure_df = unique(wb_hcp_df[:, [:UNIT_MEASURE, :UNIT_MEASURE_LABEL]])
+        unit_measure_df = @pipe wb_hcp_df |> @select(_, :UNIT_MEASURE, :UNIT_MEASURE_LABEL) |> unique(_)
         println("Unique unit measures: $(nrow(unit_measure_df))")
         println("\nUnit measures:")
         show(unit_measure_df)
         
         # Create unit_type_df with unique UNIT_TYPE and UNIT_TYPE_LABEL combinations before removing column
         println("\n\nCreating unique unit types dataframe...")
-        unit_type_df = unique(wb_hcp_df[:, [:UNIT_TYPE, :UNIT_TYPE_LABEL]])
+        unit_type_df = @pipe wb_hcp_df |> @select(_, :UNIT_TYPE, :UNIT_TYPE_LABEL) |> unique(_)
         println("Unique unit types: $(nrow(unit_type_df))")
         println("\nUnit types:")
         show(unit_type_df)
         
         # Create unit_mult_df with unique UNIT_MULT and UNIT_MULT_LABEL combinations before removing column
         println("\n\nCreating unique unit multipliers dataframe...")
-        unit_mult_df = unique(wb_hcp_df[:, [:UNIT_MULT, :UNIT_MULT_LABEL]])
+        unit_mult_df = @pipe wb_hcp_df |> @select(_, :UNIT_MULT, :UNIT_MULT_LABEL) |> unique(_)
         println("Unique unit multipliers: $(nrow(unit_mult_df))")
         println("\nUnit multipliers:")
         show(unit_mult_df)
         
-        # Remove label columns from main dataframe
-        select!(wb_hcp_df, Not([:INDICATOR_LABEL, :REF_AREA_LABEL, :SEX_LABEL, :UNIT_MEASURE_LABEL, :DECIMALS_LABEL, :UNIT_TYPE_LABEL, :UNIT_MULT_LABEL]))
-        
-        # Create VALUE column as OBS_VALUE * 10^UNIT_MULT
-        wb_hcp_df.VALUE = wb_hcp_df.OBS_VALUE .* (10.0 .^ wb_hcp_df.UNIT_MULT)
-        println("\nCreated VALUE column: OBS_VALUE * 10^UNIT_MULT")
+        # Remove label columns from main dataframe and create VALUE column
+        wb_hcp_df = @pipe wb_hcp_df |>
+            @select(_, Not([:INDICATOR_LABEL, :REF_AREA_LABEL, :SEX_LABEL, :UNIT_MEASURE_LABEL, :DECIMALS_LABEL, :UNIT_TYPE_LABEL, :UNIT_MULT_LABEL])) |>
+            @transform(_, :VALUE = :OBS_VALUE .* (10.0 .^ :UNIT_MULT))
+        println("\nRemoved label columns and created VALUE column: OBS_VALUE * 10^UNIT_MULT")
         
         describe_df(wb_hcp_df)
     else
