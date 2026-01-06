@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>World Bank HCP Indicator Visualizations</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .subtitle {
+            color: rgba(255,255,255,0.9);
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        
+        .plot-card {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .plot-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        }
+        
+        .plot-title {
+            padding: 15px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: 600;
+            font-size: 1.1em;
+        }
+        
+        .plot-image {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .footer {
+            text-align: center;
+            color: rgba(255,255,255,0.8);
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255,255,255,0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌍 World Bank HCP Indicator Visualizations</h1>
+        <p class="subtitle">Time Series Analysis by Region and Demographics</p>
+        
+        <div class="gallery">
+            <div class="plot-card">
+                <div class="plot-title">WB_HCP_ANTENATAL_CARE_1</div>
+                <img src="WB_HCP_ANTENATAL_CARE_1.png" alt="Antenatal Care Indicator 1" class="plot-image">
+            </div>
+            
+            <div class="plot-card">
+                <div class="plot-title">WB_HCP_ANTENATAL_CARE_4</div>
+                <img src="WB_HCP_ANTENATAL_CARE_4.png" alt="Antenatal Care Indicator 4" class="plot-image">
+            </div>
+            
+            <div class="plot-card">
+                <div class="plot-title">WB_HCP_ASR</div>
+                <img src="WB_HCP_ASR.png" alt="Adult Survival Rate" class="plot-image">
+            </div>
+            
+            <div class="plot-card">
+                <div class="plot-title">WB_HCP_A_SEEKERS</div>
+                <img src="WB_HCP_A_SEEKERS.png" alt="Asylum Seekers" class="plot-image">
+            </div>
+            
+            <div class="plot-card">
+                <div class="plot-title">WB_HCP_BIRTHS_18</div>
+                <img src="WB_HCP_BIRTHS_18.png" alt="Births to Women Aged 20-24" class="plot-image">
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>📊 Plots generated from World Bank Human Capital Project data (588,470 observations)</p>
+            <p>📈 Each line represents a different region and demographic group over time</p>
+        </div>
+    </div>
+</body>
+</html>
