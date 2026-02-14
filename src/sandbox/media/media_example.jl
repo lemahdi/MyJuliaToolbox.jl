@@ -90,9 +90,39 @@ println("\nNote: You can pass 'table', 'query' to read_dataframe() or set 'query
 println()
 
 # ====================================================================
-# Example 5: Using in a generic data pipeline
+# Example 5: Reading from SQL Dump Files
 # ====================================================================
-println("\nExample 5: Generic data pipeline")
+println("\nExample 5: Reading from SQL Dump Files")
+println("-" ^ 50)
+
+# Use existing sample SQL dump file
+dump_path = joinpath(@__DIR__, "sample_dump.sql")
+println("Reading from: $dump_path")
+
+# Create SQLDumpSource
+dump_source = SQLDumpSource(dump_path, db_type=:mysql)
+
+# List all tables in the dump
+println("\nListing tables in dump:")
+tables_df = read_dataframe(dump_source)
+println(tables_df)
+
+# Read specific table
+println("\nReading 'products' table:")
+products_df = read_dataframe(dump_source, table="products")
+println(products_df)
+
+# Custom query
+println("\nQuerying products with price > 10:")
+expensive_df = read_dataframe(dump_source, query="SELECT * FROM products WHERE price > 10")
+println(expensive_df)
+
+println()
+
+# ====================================================================
+# Example 6: Using in a generic data pipeline
+# ====================================================================
+println("\nExample 6: Generic data pipeline")
 println("-" ^ 50)
 
 function process_data(source::MediaSource; table=nothing, query=nothing)
@@ -126,6 +156,13 @@ db_source = DatabaseSource(db)
 println("\nProcessing database source:")
 result_db = process_data(db_source, table="users")
 println(result_db)
+
+# Also works with SQL dumps
+println("\nProcessing SQL dump source (different schema):")
+# The products table has different columns, so we just display it as-is
+result_dump = read_dataframe(dump_source, table="products")
+println("Products table:")
+println(result_dump)
 
 # ====================================================================
 # Summary

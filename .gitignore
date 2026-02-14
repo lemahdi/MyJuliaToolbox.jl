@@ -3,3 +3,4 @@
 src/sandbox/media/sample_data.csv
 src/sandbox/media/sample_data.arrow
 src/sandbox/media/sample_data.db
+src/sandbox/media/sample_dump.sql

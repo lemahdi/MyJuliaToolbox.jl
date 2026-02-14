@@ -3,7 +3,7 @@
 
 using DataFrames
 
-export MediaSource, FileSystemSource, DatabaseSource
+export MediaSource, FileSystemSource, DatabaseSource, SQLDumpSource
 
 """
     abstract type MediaSource
@@ -52,5 +52,41 @@ struct DatabaseSource <: MediaSource
     end
 end
 
+"""
+    SQLDumpSource(path::String; db_type::Symbol=:mysql, in_memory::Bool=true)
 
+A media source that reads from SQL dump files (MySQL, PostgreSQL, etc.).
 
+This source loads a SQL dump file into a SQLite database (in-memory by default)
+with automatic syntax conversion from the source database type to SQLite.
+
+# Arguments
+- `path::String`: Path to the SQL dump file
+- `db_type::Symbol`: Type of source database (`:mysql` or `:postgresql`). Default is `:mysql`
+- `in_memory::Bool`: Whether to use an in-memory SQLite database. Default is `true`
+
+# Example
+```julia
+source = SQLDumpSource("dump.sql", db_type=:mysql)
+df = read_dataframe(source, table="users")
+```
+
+# Note
+For complex databases with advanced features, consider using dedicated conversion tools
+like mysql2sqlite or pg2sqlite before loading with DatabaseSource.
+"""
+struct SQLDumpSource <: MediaSource
+    path::String
+    db_type::Symbol
+    in_memory::Bool
+    
+    function SQLDumpSource(path::String; db_type::Symbol=:mysql, in_memory::Bool=true)
+        if !isfile(path)
+            throw(ArgumentError("SQL dump file not found: $path"))
+        end
+        if !(db_type in [:mysql, :postgresql])
+            throw(ArgumentError("Unsupported db_type: $db_type. Must be :mysql or :postgresql"))
+        end
+        new(path, db_type, in_memory)
+    end
+end
