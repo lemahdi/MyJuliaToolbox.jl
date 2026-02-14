@@ -1,10 +1,12 @@
 # MyJuliaToolbox
 
 MyJuliaToolbox provides small helpers for reading and writing `DataFrame`s to common
-file formats (`CSV` and `Arrow`). The library aims to provide reliable defaults and
+file formats (`CSV` and `Arrow`), as well as database sources. The library aims to provide reliable defaults and
 convenient factories such as `read_dataframe` and `write_dataframe`.
 
 ## Quick examples
+
+### Reading from files
 
 ```julia
 using MyJuliaToolbox
@@ -21,6 +23,38 @@ Read from a gzipped CSV:
 ```julia
 df = read_dataframe("data.csv.gz")
 ```
+
+### Media Interface
+
+The Media interface provides an abstraction layer for reading data from different sources (files, databases) using a unified API:
+
+```julia
+using MyJuliaToolbox.IO
+
+# Read from CSV file
+csv_source = FileSystemSource("data.csv")
+df = read_dataframe(csv_source)
+
+# Read from Arrow file
+arrow_source = FileSystemSource("data.arrow", format=:arrow)
+df = read_dataframe(arrow_source)
+
+# Read from database table
+using SQLite
+db = SQLite.DB("mydata.db")
+db_source = DatabaseSource(db, table="users")
+df = read_dataframe(db_source)
+
+# Read with custom SQL query
+query_source = DatabaseSource(db, query="SELECT * FROM users WHERE age > 30")
+df = read_dataframe(query_source)
+```
+
+The Media interface supports:
+- **FileSystemSource**: Read CSV, Arrow, and other file formats
+- **DatabaseSource**: Read from databases (SQLite auto-detected, extensible to PostgreSQL, MySQL, etc.)
+
+### Writing files
 
 Write CSV or Arrow files (writes are atomic by default):
 

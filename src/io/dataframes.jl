@@ -6,6 +6,9 @@ using Arrow
 using Tables
 using CodecZlib
 
+# Import MediaSource types from media.jl (will be included after this file)
+# We'll add methods after media.jl is loaded
+
 export read_csv_to_df, read_arrow_to_df, read_dataframe, write_dataframe
 
 """
@@ -231,3 +234,6 @@ function write_dataframe(io::Base.IO, df::DataFrame; format::Symbol = :auto, kwa
     end
     return nothing
 end
+
+# Note: Additional read_dataframe methods for MediaSource types
+# will be defined after media.jl is included in io.jl

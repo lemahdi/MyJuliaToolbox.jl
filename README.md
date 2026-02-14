@@ -4,6 +4,8 @@
 
 ## Quick examples ✅
 
+### Reading from files
+
 Read a CSV or Arrow file (auto-detected by extension):
 
 ```julia
@@ -21,6 +23,30 @@ Read from a gzipped CSV:
 ```julia
 df = read_dataframe("data.csv.gz")
 ```
+
+### Media Interface
+
+Use the Media interface for a unified API across different data sources:
+
+```julia
+using MyJuliaToolbox.IO
+
+# Read from file
+csv_source = FileSystemSource("data.csv")
+df = read_dataframe(csv_source)
+
+# Read from database
+using SQLite
+db = SQLite.DB("mydata.db")
+db_source = DatabaseSource(db, table="users")
+df = read_dataframe(db_source)
+
+# Custom SQL query
+query_source = DatabaseSource(db, query="SELECT * FROM users WHERE age > 30")
+df = read_dataframe(query_source)
+```
+
+### Writing files
 
 Write CSV or Arrow based on extension (supports overwrite flag and compressed CSVs):
 
