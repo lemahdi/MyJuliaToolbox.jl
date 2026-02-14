@@ -46,7 +46,19 @@ function read_dataframe(df::DataFrame; format::Symbol = :auto, kwargs...)
 end
 
 function read_dataframe(tbl; format::Symbol = :auto, kwargs...)
-    if Tables.istable(tbl)
+    # Handle SQL format for database connections
+    if format == :sql
+        # Extract SQL-specific parameters
+        table = get(Dict(kwargs), :table, nothing)
+        query = get(Dict(kwargs), :query, nothing)
+        params = get(Dict(kwargs), :params, nothing)
+        
+        # Create a DatabaseSource without query (will be passed to read_dataframe)
+        source = DatabaseSource(tbl)
+        
+        # Call the DatabaseSource version of read_dataframe with table/query parameters
+        return read_dataframe(source; table=table, query=query)
+    elseif Tables.istable(tbl)
         return DataFrame(tbl)
     else
         error("Unsupported input type for read_dataframe: $(typeof(tbl))")
@@ -101,7 +113,19 @@ function read_dataframe(path::AbstractString; format::Symbol = :auto, kwargs...)
 end
 
 function read_dataframe(io::Base.IO; format::Symbol = :auto, kwargs...)
-    if format == :arrow
+    if format == :sql
+        # For SQL format, io should be a database connection
+        # Extract SQL-specific parameters
+        table = get(Dict(kwargs), :table, nothing)
+        query = get(Dict(kwargs), :query, nothing)
+        params = get(Dict(kwargs), :params, nothing)
+        
+        # Create a DatabaseSource without query (will be passed to read_dataframe)
+        source = DatabaseSource(io)
+        
+        # Call the DatabaseSource version of read_dataframe with table/query parameters
+        return read_dataframe(source; table=table, query=query)
+    elseif format == :arrow
         tbl = Arrow.Table(io; kwargs...)
         return DataFrame(tbl)
     elseif format == :csv
