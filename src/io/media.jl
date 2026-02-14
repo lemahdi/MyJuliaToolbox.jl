@@ -30,34 +30,27 @@ struct FileSystemSource <: MediaSource
 end
 
 """
-    DatabaseSource(connection; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, params=nothing)
+    DatabaseSource(connection; query::Union{String,Nothing}=nothing, params=nothing)
 
 A media source that reads from a database.
 
 # Arguments
 - `connection`: Database connection object
-- `table::Union{String,Nothing}`: Table name to read from (alternative to query)
-- `query::Union{String,Nothing}`: SQL query to execute (alternative to table)
+- `query::Union{String,Nothing}`: SQL query to execute (optional, can be provided to read_dataframe instead)
 - `params`: Optional query parameters
 
 # Note
-Provide either `table` or `query`, not both.
+You can provide a query here or pass a table name to read_dataframe.
 """
 struct DatabaseSource <: MediaSource
     connection::Any
-    table::Union{String,Nothing}
     query::Union{String,Nothing}
     params::Any
     
-    function DatabaseSource(connection; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, params=nothing)
-        if isnothing(table) && isnothing(query)
-            error("Must provide either 'table' or 'query' argument")
-        end
-        if !isnothing(table) && !isnothing(query)
-            error("Cannot provide both 'table' and 'query' arguments")
-        end
-        new(connection, table, query, params)
+    function DatabaseSource(connection; query::Union{String,Nothing}=nothing, params=nothing)
+        new(connection, query, params)
     end
 end
+
 
 

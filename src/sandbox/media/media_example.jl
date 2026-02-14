@@ -68,10 +68,10 @@ println("Connecting to: $sample_db_path")
 
 db = SQLite.DB(sample_db_path)
 
-# Read entire table using DatabaseSource with table parameter
+# Read entire table using DatabaseSource with table parameter in read_dataframe
 println("\nReading entire 'users' table:")
-table_source = DatabaseSource(db, table="users")
-df_table = read_dataframe(table_source)
+table_source = DatabaseSource(db)
+df_table = read_dataframe(table_source, table="users")
 println(first(df_table, 5))
 
 # Read with custom query using DatabaseSource
@@ -80,8 +80,7 @@ query_source = DatabaseSource(db, query="SELECT * FROM users WHERE age > 30")
 df_query = read_dataframe(query_source)
 println(df_query)
 
-println("\nNote: DatabaseSource now supports both 'table' and 'query' parameters!")
-println("Use read_dataframe() to read from any MediaSource.")
+println("\nNote: Pass table name to read_dataframe() or set query in DatabaseSource!")
 println()
 
 # ====================================================================
@@ -90,9 +89,13 @@ println()
 println("\nExample 5: Generic data pipeline")
 println("-" ^ 50)
 
-function process_data(source::MediaSource)
+function process_data(source::MediaSource; table=nothing)
     # Read data from any source using read_dataframe
-    df = read_dataframe(source)
+    df = if isnothing(table)
+        read_dataframe(source)
+    else
+        read_dataframe(source, table=table)
+    end
     
     # Process the data (example: filter and transform)
     processed = filter(row -> row.age > 28, df)
@@ -109,6 +112,12 @@ println(result_csv)
 println("\nProcessing Arrow source:")
 result_arrow = process_data(arrow_source)
 println(result_arrow)
+
+# Also works with database
+db_source = DatabaseSource(db)
+println("\nProcessing database source:")
+result_db = process_data(db_source, table="users")
+println(result_db)
 
 # ====================================================================
 # Summary

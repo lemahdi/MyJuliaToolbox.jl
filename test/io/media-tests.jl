@@ -6,7 +6,6 @@ using DataFrames
 using CSV
 using Arrow
 using SQLite
-using Random
 
 @testset "Media tests" begin
     # Create temporary directory for test files
@@ -77,27 +76,19 @@ using Random
     @testset "DatabaseSource - Constructor" begin
         db = SQLite.DB()  # In-memory database
         
-        # Test that both table and query cannot be provided
-        @test_throws ErrorException DatabaseSource(db, table="test", query="SELECT * FROM test")
-        
-        # Test that at least one must be provided
-        @test_throws ErrorException DatabaseSource(db)
-        
-        # Test with table only
-        source_table = DatabaseSource(db, table="users")
-        @test source_table.table == "users"
-        @test isnothing(source_table.query)
-        @test isnothing(source_table.params)
-        
         # Test with query only
         source_query = DatabaseSource(db, query="SELECT * FROM users")
-        @test isnothing(source_query.table)
         @test source_query.query == "SELECT * FROM users"
+        @test isnothing(source_query.params)
         
         # Test with query and params
         source_params = DatabaseSource(db, query="SELECT * FROM users WHERE age > ?", params=[25])
         @test source_params.query == "SELECT * FROM users WHERE age > ?"
         @test source_params.params == [25]
+        
+        # Test with no query (table will be passed to read_dataframe)
+        source_no_query = DatabaseSource(db)
+        @test isnothing(source_no_query.query)
     end
     
     @testset "DatabaseSource - SQLite read with table" begin
@@ -106,9 +97,9 @@ using Random
         # Create table and insert data
         SQLite.load!(test_df, db, "test_users")
         
-        # Read using table parameter
-        source = DatabaseSource(db, table="test_users")
-        df = read_dataframe(source)
+        # Read using table parameter in read_dataframe
+        source = DatabaseSource(db)
+        df = read_dataframe(source, table="test_users")
         
         @test df isa DataFrame
         @test nrow(df) == 5
@@ -152,14 +143,14 @@ using Random
         SQLite.load!(products_df, db, "products")
         
         # Read from first table
-        source_users = DatabaseSource(db, table="users")
-        df_users = read_dataframe(source_users)
+        source_users = DatabaseSource(db)
+        df_users = read_dataframe(source_users, table="users")
         @test nrow(df_users) == 5
         @test "name" in names(df_users)
         
         # Read from second table
-        source_products = DatabaseSource(db, table="products")
-        df_products = read_dataframe(source_products)
+        source_products = DatabaseSource(db)
+        df_products = read_dataframe(source_products, table="products")
         @test nrow(df_products) == 3
         @test "product_name" in names(df_products)
         
@@ -186,8 +177,12 @@ using Random
     
     @testset "Media - Generic processing function" begin
         # Function that works with any MediaSource
-        function count_adults(source::MediaSource)
-            df = read_dataframe(source)
+        function count_adults(source::MediaSource; table=nothing)
+            if isnothing(table)
+                df = read_dataframe(source)
+            else
+                df = read_dataframe(source, table=table)
+            end
             return count(row -> row.age >= 30, eachrow(df))
         end
         
@@ -204,8 +199,8 @@ using Random
         # Test with Database
         db = SQLite.DB()
         SQLite.load!(test_df, db, "users")
-        db_source = DatabaseSource(db, table="users")
-        @test count_adults(db_source) == 3
+        db_source = DatabaseSource(db)
+        @test count_adults(db_source, table="users") == 3
     end
     
     finally

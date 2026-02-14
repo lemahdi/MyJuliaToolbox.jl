@@ -16,18 +16,29 @@ function read_dataframe(source::FileSystemSource; kwargs...)
 end
 
 """
-    read_dataframe(source::DatabaseSource; kwargs...) -> DataFrame
+    read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
 
 Read a DataFrame from a DatabaseSource.
 
 # Arguments
 - `source::DatabaseSource`: The database source to read from  
+- `table::Union{String,Nothing}`: Table name to read from (alternative to query in source)
 - `kwargs...`: Additional keyword arguments (currently unused)
+
+# Note
+Provide either `table` parameter or set `query` in DatabaseSource, not both.
 """
-function read_dataframe(source::DatabaseSource; kwargs...)
-    # Construct the query based on table or query field
-    sql_query = if !isnothing(source.table)
-        "SELECT * FROM $(source.table)"
+function read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=nothing, kwargs...)
+    # Construct the query based on table parameter or query field
+    if !isnothing(table) && !isnothing(source.query)
+        error("Cannot provide both 'table' parameter and 'query' in DatabaseSource")
+    end
+    if isnothing(table) && isnothing(source.query)
+        error("Must provide either 'table' parameter or 'query' in DatabaseSource")
+    end
+    
+    sql_query = if !isnothing(table)
+        "SELECT * FROM $(table)"
     else
         source.query
     end
