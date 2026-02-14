@@ -114,7 +114,7 @@ using SQLite
         # Create table and insert data
         SQLite.load!(test_df, db, "test_users")
         
-        # Read using query parameter
+        # Read using query in DatabaseSource
         source = DatabaseSource(db, query="SELECT * FROM test_users WHERE age > 28")
         df = read_dataframe(source)
         
@@ -126,6 +126,12 @@ using SQLite
         source_ordered = DatabaseSource(db, query="SELECT * FROM test_users ORDER BY age DESC")
         df_ordered = read_dataframe(source_ordered)
         @test df_ordered.age == sort(test_df.age, rev=true)
+        
+        # Test with explicit query parameter in read_dataframe
+        source_no_query = DatabaseSource(db)
+        df_query_param = read_dataframe(source_no_query, query="SELECT * FROM test_users WHERE age < 30")
+        @test nrow(df_query_param) == 2  # Alice (25), Diana (28)
+        @test all(df_query_param.age .< 30)
     end
     
     @testset "DatabaseSource - SQLite with multiple tables" begin

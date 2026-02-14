@@ -75,12 +75,18 @@ df_table = read_dataframe(table_source, table="users")
 println(first(df_table, 5))
 
 # Read with custom query using DatabaseSource
-println("\nQuerying users with age > 30:")
+println("\nQuerying users with age > 30 (query in DatabaseSource):")
 query_source = DatabaseSource(db, query="SELECT * FROM users WHERE age > 30")
 df_query = read_dataframe(query_source)
 println(df_query)
 
-println("\nNote: Pass table name to read_dataframe() or set query in DatabaseSource!")
+# Read with query passed directly to read_dataframe
+println("\nQuerying users with age <= 30 (query as parameter):")
+plain_source = DatabaseSource(db)
+df_query_param = read_dataframe(plain_source, query="SELECT * FROM users WHERE age <= 30")
+println(df_query_param)
+
+println("\nNote: You can pass 'table', 'query' to read_dataframe() or set 'query' in DatabaseSource!")
 println()
 
 # ====================================================================
@@ -89,12 +95,14 @@ println()
 println("\nExample 5: Generic data pipeline")
 println("-" ^ 50)
 
-function process_data(source::MediaSource; table=nothing)
+function process_data(source::MediaSource; table=nothing, query=nothing)
     # Read data from any source using read_dataframe
-    df = if isnothing(table)
-        read_dataframe(source)
-    else
+    df = if !isnothing(table)
         read_dataframe(source, table=table)
+    elseif !isnothing(query)
+        read_dataframe(source, query=query)
+    else
+        read_dataframe(source)
     end
     
     # Process the data (example: filter and transform)

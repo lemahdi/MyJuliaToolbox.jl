@@ -16,29 +16,34 @@ function read_dataframe(source::FileSystemSource; kwargs...)
 end
 
 """
-    read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
+    read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
 
 Read a DataFrame from a DatabaseSource.
 
 # Arguments
 - `source::DatabaseSource`: The database source to read from  
-- `table::Union{String,Nothing}`: Table name to read from (alternative to query in source)
+- `table::Union{String,Nothing}`: Table name to read from
+- `query::Union{String,Nothing}`: SQL query to execute
 - `kwargs...`: Additional keyword arguments (currently unused)
 
 # Note
-Provide either `table` parameter or set `query` in DatabaseSource, not both.
+Provide one of: `table` parameter, `query` parameter, or set `query` in DatabaseSource.
 """
-function read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=nothing, kwargs...)
-    # Construct the query based on table parameter or query field
-    if !isnothing(table) && !isnothing(source.query)
-        error("Cannot provide both 'table' parameter and 'query' in DatabaseSource")
+function read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
+    # Count how many query sources are provided
+    num_sources = count(!isnothing, [table, query, source.query])
+    
+    if num_sources == 0
+        error("Must provide either 'table' parameter, 'query' parameter, or 'query' in DatabaseSource")
     end
-    if isnothing(table) && isnothing(source.query)
-        error("Must provide either 'table' parameter or 'query' in DatabaseSource")
+    if num_sources > 1
+        error("Cannot provide multiple query sources. Choose one of: 'table' parameter, 'query' parameter, or 'query' in DatabaseSource")
     end
     
     sql_query = if !isnothing(table)
         "SELECT * FROM $(table)"
+    elseif !isnothing(query)
+        query
     else
         source.query
     end
