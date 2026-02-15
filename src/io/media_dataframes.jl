@@ -1,6 +1,8 @@
 # Additional read_dataframe methods for MediaSource types
 # This file extends the read_dataframe function to work with MediaSource objects
 
+using SQLite
+
 """
     read_dataframe(source::FileSystemSource; kwargs...) -> DataFrame
 
@@ -31,7 +33,9 @@ Provide one of: `table` parameter, `query` parameter, or set `query` in Database
 """
 function read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
     # Count how many query sources are provided
-    num_sources = count(!isnothing, [table, query, source.query])
+    num_sources = (isnothing(table) ? 0 : 1) +
+                  (isnothing(query) ? 0 : 1) +
+                  (isnothing(source.query) ? 0 : 1)
     
     if num_sources == 0
         error("Must provide either 'table' parameter, 'query' parameter, or 'query' in DatabaseSource")
@@ -50,9 +54,9 @@ function read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=not
     
     # Try to detect the database type and use appropriate method
     # Check if it's SQLite
-    if isdefined(Main, :SQLite) && typeof(source.connection) <: Main.SQLite.DB
+    if source.connection isa SQLite.DB
         # SQLite implementation
-        return Main.SQLite.DBInterface.execute(source.connection, sql_query, source.params === nothing ? [] : source.params) |> DataFrame
+        return SQLite.DBInterface.execute(source.connection, sql_query, source.params === nothing ? [] : source.params) |> DataFrame
     else
         # Generic template for other databases
         error("""
@@ -96,32 +100,35 @@ Read a DataFrame from a SQLDumpSource by loading the SQL dump into SQLite and qu
 - For MySQL dumps, converts AUTO_INCREMENT, KEY definitions, and data types
 """
 function read_dataframe(source::SQLDumpSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
-    # Load required package
-    if !isdefined(Main, :SQLite)
-        error("SQLite package required. Please run: using SQLite")
+    if !isnothing(table) && !isnothing(query)
+        error("Cannot provide both 'table' and 'query'. Choose one.")
     end
-    
+
     # Create SQLite database
-    db = source.in_memory ? Main.SQLite.DB() : Main.SQLite.DB(tempname() * ".db")
-    
-    # Load the SQL dump
-    _load_sql_dump!(db, source.path, source.db_type)
-    
-    # If no table or query specified, return list of tables
-    if isnothing(table) && isnothing(query)
-        tables_query = "SELECT name FROM sqlite_master WHERE type='table' AND name != 'sqlite_sequence' ORDER BY name"
-        return Main.SQLite.DBInterface.execute(db, tables_query) |> DataFrame
+    db = source.in_memory ? SQLite.DB() : SQLite.DB(tempname() * ".db")
+
+    try
+        # Load the SQL dump
+        _load_sql_dump!(db, source.path, source.db_type)
+
+        # If no table or query specified, return list of tables
+        if isnothing(table) && isnothing(query)
+            tables_query = "SELECT name FROM sqlite_master WHERE type='table' AND name != 'sqlite_sequence' ORDER BY name"
+            return SQLite.DBInterface.execute(db, tables_query) |> DataFrame
+        end
+
+        # Build the query
+        sql_query = if !isnothing(table)
+            "SELECT * FROM $(table)"
+        else
+            query
+        end
+
+        # Execute query and return DataFrame
+        return SQLite.DBInterface.execute(db, sql_query) |> DataFrame
+    finally
+        SQLite.close(db)
     end
-    
-    # Build the query
-    sql_query = if !isnothing(table)
-        "SELECT * FROM $(table)"
-    else
-        query
-    end
-    
-    # Execute query and return DataFrame
-    return Main.SQLite.DBInterface.execute(db, sql_query) |> DataFrame
 end
 
 """
@@ -180,7 +187,7 @@ function _load_sql_dump!(db, path::String, db_type::Symbol)
                                     join(table_columns, ",\n  ") * "\n)"
                         
                         try
-                            Main.SQLite.execute(db, table_def)
+                            SQLite.execute(db, table_def)
                         catch e
                             @warn "Failed to create table $table_name: $(first(string(e), 100))"
                         end
@@ -214,7 +221,7 @@ function _load_sql_dump!(db, path::String, db_type::Symbol)
                 stmt = replace(stmt, r"\\'" => "''")
                 
                 try
-                    Main.SQLite.execute(db, stmt)
+                    SQLite.execute(db, stmt)
                 catch e
                     @warn "Failed to execute INSERT for table: $e"
                 end

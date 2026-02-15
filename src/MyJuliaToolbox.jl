@@ -5,7 +5,7 @@ module MyJuliaToolbox
 Submodules:
 - `MyJuliaToolbox.IO` — I/O helpers for `DataFrame`s (CSV, Arrow, gzipped CSVs).
 
-Main exported helpers (re-exported from `MyJuliaToolbox.IO`):
+Primary exported helpers (re-exported from `MyJuliaToolbox.IO`):
 - `read_dataframe`, `write_dataframe` — factory-style read/write functions for various sources and sinks.
 - `read_csv_to_df`, `read_arrow_to_df` — convenience helpers.
 """
