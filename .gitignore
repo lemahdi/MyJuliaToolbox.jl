@@ -1,4 +1,5 @@
 /Manifest*.toml
+docs/Manifest*.toml
 # Sandbox sample data files
 src/sandbox/media/sample_data.csv
 src/sandbox/media/sample_data.arrow
