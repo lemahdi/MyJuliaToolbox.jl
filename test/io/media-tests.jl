@@ -182,8 +182,8 @@ using SQLite
     # ==================================================================
     
     @testset "Media - Generic processing function" begin
-        # Function that works with any MediaSource
-        function count_adults(source::MediaSource; table=nothing)
+        # Function that works with any iMediaSource
+        function count_adults(source::iMediaSource; table=nothing)
             if isnothing(table)
                 df = read_dataframe(source)
             else

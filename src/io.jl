@@ -8,7 +8,7 @@ include("io/dataframes.jl")
 # Include media interface for reading from files or databases
 include("io/media.jl")
 
-# Include read_dataframe extensions for MediaSource types
+# Include read_dataframe extensions for iMediaSource types
 include("io/media_dataframes.jl")
 
 end # module IO

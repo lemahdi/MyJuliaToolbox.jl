@@ -3,15 +3,15 @@
 
 using DataFrames
 
-export MediaSource, FileSystemSource, DatabaseSource, SQLDumpSource
+export iMediaSource, FileSystemSource, DatabaseSource, SQLDumpSource
 
 """
-    abstract type MediaSource
+    abstract type iMediaSource
 
 Abstract base type for media data sources. Concrete implementations should define
 how to read data from specific sources (filesystem, database, etc.).
 """
-abstract type MediaSource end
+abstract type iMediaSource end
 
 """
     FileSystemSource(path::String; format::Symbol=:auto)
@@ -22,7 +22,7 @@ A media source that reads from the file system.
 - `path::String`: Path to the file
 - `format::Symbol`: Format of the file (`:csv`, `:arrow`, `:auto`). Default is `:auto`
 """
-struct FileSystemSource <: MediaSource
+struct FileSystemSource <: iMediaSource
     path::String
     format::Symbol
     
@@ -42,7 +42,7 @@ A media source that reads from a database.
 # Note
 You can provide a query here or pass a table name to read_dataframe.
 """
-struct DatabaseSource <: MediaSource
+struct DatabaseSource <: iMediaSource
     connection::Any
     query::Union{String,Nothing}
     params::Any
@@ -75,7 +75,7 @@ df = read_dataframe(source, table="users")
 For complex databases with advanced features, consider using dedicated conversion tools
 like mysql2sqlite or pg2sqlite before loading with DatabaseSource.
 """
-struct SQLDumpSource <: MediaSource
+struct SQLDumpSource <: iMediaSource
     path::String
     db_type::Symbol
     in_memory::Bool

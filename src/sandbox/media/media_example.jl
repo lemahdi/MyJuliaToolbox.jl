@@ -125,7 +125,7 @@ println()
 println("\nExample 6: Generic data pipeline")
 println("-" ^ 50)
 
-function process_data(source::MediaSource; table=nothing, query=nothing)
+function process_data(source::iMediaSource; table=nothing, query=nothing)
     # Read data from any source using read_dataframe
     df = if !isnothing(table)
         read_dataframe(source, table=table)

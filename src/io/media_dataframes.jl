@@ -1,5 +1,5 @@
-# Additional read_dataframe methods for MediaSource types
-# This file extends the read_dataframe function to work with MediaSource objects
+# Additional read_dataframe methods for iMediaSource types
+# This file extends the read_dataframe function to work with iMediaSource objects
 
 using SQLite
 
@@ -327,9 +327,9 @@ end
 
 """
 # Arguments
-- `source::MediaSource`: Any media source type
+- `source::iMediaSource`: Any media source type
 - `kwargs...`: Additional keyword arguments
 """
-function read_dataframe(source::MediaSource; kwargs...)
-    error("read_dataframe not implemented for MediaSource type: $(typeof(source))")
+function read_dataframe(source::iMediaSource; kwargs...)
+    error("read_dataframe not implemented for iMediaSource type: $(typeof(source))")
 end
