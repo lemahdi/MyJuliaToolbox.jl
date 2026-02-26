@@ -162,6 +162,13 @@ function _metadata_to_string(metadata)
     return isnothing(metadata) ? "" : string(metadata)
 end
 
+function _validated_sql_identifier(identifier::String; field::String="identifier")
+    if match(r"^[A-Za-z_][A-Za-z0-9_]*$", identifier) === nothing
+        throw(ArgumentError("Invalid $field '$identifier'. Use only letters, digits, and underscore."))
+    end
+    return identifier
+end
+
 function write_log_record(source::FileSystemSource, record::LogRecord; kwargs...)
     path = source.path
     dir = dirname(path)
@@ -184,12 +191,10 @@ function write_log_record(source::DatabaseSource, record::LogRecord; table::Stri
     if !(source.connection isa SQLite.DB)
         throw(ArgumentError("Database logging currently supports only SQLite.DB connections"))
     end
-    if match(r"^[A-Za-z_][A-Za-z0-9_]*$", table) === nothing
-        throw(ArgumentError("Invalid table name '$table'. Use only letters, digits, and underscore."))
-    end
+    safe_table = _validated_sql_identifier(table; field="table name")
 
     create_stmt = """
-        CREATE TABLE IF NOT EXISTS $table (
+        CREATE TABLE IF NOT EXISTS $safe_table (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
             level TEXT NOT NULL,
@@ -201,7 +206,7 @@ function write_log_record(source::DatabaseSource, record::LogRecord; table::Stri
 
     SQLite.DBInterface.execute(
         source.connection,
-        "INSERT INTO $table (timestamp, level, message, metadata) VALUES (?, ?, ?, ?)",
+        "INSERT INTO $safe_table (timestamp, level, message, metadata) VALUES (?, ?, ?, ?)",
         (string(record.timestamp), String(record.level), record.message, _metadata_to_string(record.metadata)),
     )
 
@@ -225,7 +230,7 @@ function _log_worker_loop(source::iMediaSource, queue::_LogRingBuffer, sink_kwar
         try
             write_log_record(source, record; sink_kwargs...)
         catch err
-            @warn "Failed to write log record" error=err source=typeof(source)
+            @warn "Failed to write log record" exception=(err, catch_backtrace()) source=typeof(source)
         end
     end
     return nothing
@@ -251,7 +256,7 @@ function log!(logger::AsyncLogger, level::Symbol, message::AbstractString; metad
     if !_should_log(logger.min_level, level)
         return true
     end
-    record = LogRecord(now(UTC), level, String(message), metadata)
+    record = LogRecord(now(Dates.UTC), level, String(message), metadata)
     return _enqueue!(logger.queue, record)
 end
 
@@ -266,8 +271,30 @@ log_error!(logger::AsyncLogger, message::AbstractString; metadata=nothing) = log
 Wait until the pending queue is drained by the worker task.
 """
 function flush_logger!(logger::AsyncLogger)
-    while _count(logger.queue) > 0
-        sleep(0.001)
+    last_count = -1
+    stable_iterations = 0
+    sleep_interval = 0.001
+    max_sleep_interval = 0.1
+    max_stable_iterations = 10_000
+
+    while true
+        current_count = _count(logger.queue)
+        if current_count == 0
+            break
+        end
+
+        if current_count == last_count
+            stable_iterations += 1
+            if stable_iterations >= max_stable_iterations
+                throw(ErrorException("Logger queue did not drain; worker may have failed while flushing."))
+            end
+        else
+            last_count = current_count
+            stable_iterations = 0
+        end
+
+        sleep(sleep_interval)
+        sleep_interval = min(sleep_interval * 2, max_sleep_interval)
     end
     return nothing
 end

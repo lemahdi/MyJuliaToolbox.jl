@@ -67,6 +67,7 @@ stop_logger!(file_logger)
 ```
 
 For SQLite logging, pass a `DatabaseSource(db)` and optional `table="logs"` to `AsyncLogger`.
+Table names must match `[A-Za-z_][A-Za-z0-9_]*` (letters/digits/underscore, not starting with a digit).
 
 ### Writing files
 
