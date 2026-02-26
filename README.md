@@ -46,6 +46,28 @@ query_source = DatabaseSource(db, query="SELECT * FROM users WHERE age > 30")
 df = read_dataframe(query_source)
 ```
 
+### Async logging
+
+Use the non-blocking logger with any `iMediaSource` sink.
+
+```julia
+using MyJuliaToolbox
+
+# Console sink
+console_logger = AsyncLogger(ConsoleSource(); min_level=:info, capacity=1024)
+log_info!(console_logger, "job started", metadata=(job_id=42,))
+log_warn!(console_logger, "slow step detected")
+stop_logger!(console_logger)
+
+# File sink
+file_logger = AsyncLogger(FileSystemSource("logs/app.log"); min_level=:debug)
+log_debug!(file_logger, "debug details")
+log_error!(file_logger, "step failed", metadata=(step="load",))
+stop_logger!(file_logger)
+```
+
+For SQLite logging, pass a `DatabaseSource(db)` and optional `table="logs"` to `AsyncLogger`.
+
 ### Writing files
 
 Write CSV or Arrow based on extension (supports overwrite flag and compressed CSVs):

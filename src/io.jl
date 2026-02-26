@@ -8,6 +8,9 @@ include("io/dataframes.jl")
 # Include media interface for reading from files or databases
 include("io/media.jl")
 
+# Include asynchronous logger with iMediaSource sinks
+include("io/logger.jl")
+
 # Include read_dataframe extensions for iMediaSource types
 include("io/media_dataframes.jl")
 

@@ -6,6 +6,7 @@ include("io/arrow-tests.jl")
 include("io/factory-tests.jl")
 include("io/media-tests.jl")
 include("io/sqldump-tests.jl")
+include("io/logger-tests.jl")
 
 # utils tests
 include("utils/dates-tests.jl")

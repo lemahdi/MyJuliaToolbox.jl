@@ -3,7 +3,7 @@
 
 using DataFrames
 
-export iMediaSource, FileSystemSource, DatabaseSource, SQLDumpSource
+export iMediaSource, FileSystemSource, DatabaseSource, SQLDumpSource, ConsoleSource
 
 """
     abstract type iMediaSource
@@ -90,3 +90,17 @@ struct SQLDumpSource <: iMediaSource
         new(path, db_type, in_memory)
     end
 end
+
+"""
+    ConsoleSource(; stream::Base.IO=stdout)
+
+A media source that writes to a console-like stream.
+
+# Arguments
+- `stream::Base.IO`: Output stream to write logs/messages to. Default is `stdout`.
+"""
+struct ConsoleSource <: iMediaSource
+    stream::Base.IO
+end
+
+ConsoleSource(; stream::Base.IO=stdout) = ConsoleSource(stream)
