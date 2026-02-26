@@ -11,3 +11,6 @@ include("io/logger-tests.jl")
 # utils tests
 include("utils/dates-tests.jl")
 
+# parameters tests
+include("parameters/parameters-tests.jl")
+
