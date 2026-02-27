@@ -32,6 +32,7 @@ using SQLite
         source = FileSystemMedia(temp_dir, format=:csv)
         @test source.path == temp_dir
         @test source.format == :csv
+        @test source.parameters_locator === nothing
 
         df = read_dataframe(source, "test.csv")
         @test df isa DataFrame
@@ -91,11 +92,13 @@ using SQLite
         @test source_path.db_type == :sqlite
         @test source_path.locator == ":memory:"
         @test source_path.connection isa SQLite.DB
+        @test source_path.parameters_locator === nothing
 
         # compatibility constructor with connection object
         source_conn = DatabaseMedia(db)
         @test source_conn.db_type == :sqlite
         @test source_conn.connection === db
+        @test source_conn.parameters_locator === nothing
 
         SQLite.close(source_path.connection)
         SQLite.close(db)

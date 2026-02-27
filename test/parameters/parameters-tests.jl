@@ -1,6 +1,7 @@
 using Test
 using MyJuliaToolbox
 using MyJuliaToolbox.IO
+using SQLite
 
 @testset "Parameters from JSON" begin
     struct OptimizerParameters <: iParameters
@@ -150,6 +151,7 @@ using MyJuliaToolbox.IO
 
     @testset "read_parameters from media source" begin
         temp_dir = mktempdir()
+        params_root = nothing
         try
             conf_dir = joinpath(temp_dir, "configs")
             mkpath(conf_dir)
@@ -186,8 +188,43 @@ using MyJuliaToolbox.IO
             end
             @test non_json_error isa ArgumentError
             @test occursin("expected a .json file", string(non_json_error))
+
+            params_root = mktempdir()
+            json_in_root = joinpath(params_root, "model.json")
+            open(json_in_root, "w") do io
+                write(io, read(json_path, String))
+            end
+
+            fs_with_parameters = FileSystemMedia(temp_dir, parameters_locator=params_root)
+            params_from_fs_locator = read_parameters(ModelParameters, fs_with_parameters, "model.json")
+            @test params_from_fs_locator.name == "fs-model"
+
+            db_source = DatabaseMedia(":memory:", parameters_locator=params_root)
+            try
+                params_from_db_locator = read_parameters(ModelParameters, db_source, "model.json")
+                @test params_from_db_locator.optimizer.beta1 == 0.91
+            finally
+                SQLite.close(db_source.connection)
+            end
+
+            db_without_locator = DatabaseMedia(":memory:")
+            try
+                missing_locator_error = try
+                    read_parameters(ModelParameters, db_without_locator, "model.json")
+                    nothing
+                catch err
+                    err
+                end
+                @test missing_locator_error isa ArgumentError
+                @test occursin("requires `parameters_locator`", string(missing_locator_error))
+            finally
+                SQLite.close(db_without_locator.connection)
+            end
         finally
             rm(temp_dir; recursive=true, force=true)
+            if params_root !== nothing
+                rm(params_root; recursive=true, force=true)
+            end
         end
     end
 end

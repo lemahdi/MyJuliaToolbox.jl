@@ -16,7 +16,7 @@ how they support reading, writing, or both for specific media types
 abstract type iSourceMedia end
 
 """
-    FileSystemMedia(path::String; format::Symbol=:auto)
+    FileSystemMedia(path::String; format::Symbol=:auto, parameters_locator::Union{String,Nothing}=nothing)
 
 A media backend for file-system paths. Depending on the operation, it can be used
 for reading (e.g. `read_dataframe`) and writing (e.g. logger/file sinks).
@@ -24,17 +24,19 @@ for reading (e.g. `read_dataframe`) and writing (e.g. logger/file sinks).
 # Arguments
 - `path::String`: Path to the file
 - `format::Symbol`: Format of the file (`:csv`, `:arrow`, `:auto`). Default is `:auto`
+- `parameters_locator::Union{String,Nothing}`: Optional path/URL root used by `read_parameters`
 """
 struct FileSystemMedia <: iSourceMedia
     path::String
     format::Symbol
+    parameters_locator::Union{String,Nothing}
     
-    FileSystemMedia(path::String; format::Symbol=:auto) = new(path, format)
+    FileSystemMedia(path::String; format::Symbol=:auto, parameters_locator::Union{String,Nothing}=nothing) = new(path, format, parameters_locator)
 end
 
 """
-    DatabaseMedia(locator::String; db_type::Symbol=:sqlite)
-    DatabaseMedia(connection; db_type::Symbol=:sqlite)
+    DatabaseMedia(locator::String; db_type::Symbol=:sqlite, parameters_locator::Union{String,Nothing}=nothing)
+    DatabaseMedia(connection; db_type::Symbol=:sqlite, parameters_locator::Union{String,Nothing}=nothing)
 
 A media backend for database sources. Depending on the operation, it can be
 used for reading (queries) and writing (tables).
@@ -42,6 +44,7 @@ used for reading (queries) and writing (tables).
 # Arguments
 - `locator::String`: Database path/URL (for example `"test.db"`, `":memory:"`, or `"sqlite:///tmp/test.db"`)
 - `db_type::Symbol`: Database type. Currently supported: `:sqlite`
+- `parameters_locator::Union{String,Nothing}`: Optional path/URL root used by `read_parameters`
 - `connection`: Optional pre-opened database connection for compatibility
 
 # Note
@@ -52,21 +55,22 @@ struct DatabaseMedia <: iSourceMedia
     locator::Union{String,Nothing}
     db_type::Symbol
     connection::Any
+    parameters_locator::Union{String,Nothing}
 
-    function DatabaseMedia(locator::String; db_type::Symbol=:sqlite)
+    function DatabaseMedia(locator::String; db_type::Symbol=:sqlite, parameters_locator::Union{String,Nothing}=nothing)
         if !(db_type in [:sqlite])
             throw(ArgumentError("Unsupported db_type: $db_type. Currently supported: :sqlite"))
         end
         db_path = _sqlite_path_from_locator(locator)
         conn = SQLite.DB(db_path)
-        new(locator, db_type, conn)
+        new(locator, db_type, conn, parameters_locator)
     end
 
-    function DatabaseMedia(connection; db_type::Symbol=:sqlite)
+    function DatabaseMedia(connection; db_type::Symbol=:sqlite, parameters_locator::Union{String,Nothing}=nothing)
         if !(db_type in [:sqlite])
             throw(ArgumentError("Unsupported db_type: $db_type. Currently supported: :sqlite"))
         end
-        new(nothing, db_type, connection)
+        new(nothing, db_type, connection, parameters_locator)
     end
 end
 
