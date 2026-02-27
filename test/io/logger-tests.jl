@@ -58,8 +58,8 @@ using Dates
         @test df.message[1] == "db message"
         @test occursin("request_id", df.metadata[1])
 
-        query_source = DatabaseMedia(db, query="SELECT level, message, metadata FROM test_logs")
-        df_via_source = read_dataframe(query_source)
+        query_source = DatabaseMedia(db)
+        df_via_source = read_dataframe(query_source, query="SELECT level, message, metadata FROM test_logs")
         @test nrow(df_via_source) == 1
         @test df_via_source.level[1] == "warn"
         @test df_via_source.message[1] == "db message"

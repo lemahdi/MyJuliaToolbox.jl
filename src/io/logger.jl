@@ -188,27 +188,30 @@ function write_log_record(source::ConsoleMedia, record::LogRecord; kwargs...)
 end
 
 function write_log_record(source::DatabaseMedia, record::LogRecord; table::String="logs", kwargs...)
-    if !(source.connection isa SQLite.DB)
-        throw(ArgumentError("Database logging currently supports only SQLite.DB connections"))
-    end
     safe_table = _validated_sql_identifier(table; field="table name")
 
-    create_stmt = """
-        CREATE TABLE IF NOT EXISTS $safe_table (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            level TEXT NOT NULL,
-            message TEXT NOT NULL,
-            metadata TEXT
-        )
-    """
-    SQLite.execute(source.connection, create_stmt)
+    _with_database_connection(source) do conn
+        if !(conn isa SQLite.DB)
+            throw(ArgumentError("Database logging currently supports only SQLite connections"))
+        end
 
-    SQLite.DBInterface.execute(
-        source.connection,
-        "INSERT INTO $safe_table (timestamp, level, message, metadata) VALUES (?, ?, ?, ?)",
-        (string(record.timestamp), String(record.level), record.message, _metadata_to_string(record.metadata)),
-    )
+        create_stmt = """
+            CREATE TABLE IF NOT EXISTS $safe_table (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                level TEXT NOT NULL,
+                message TEXT NOT NULL,
+                metadata TEXT
+            )
+        """
+        SQLite.execute(conn, create_stmt)
+
+        SQLite.DBInterface.execute(
+            conn,
+            "INSERT INTO $safe_table (timestamp, level, message, metadata) VALUES (?, ?, ?, ?)",
+            (string(record.timestamp), String(record.level), record.message, _metadata_to_string(record.metadata)),
+        )
+    end
 
     return nothing
 end

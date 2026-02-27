@@ -2,8 +2,9 @@
 # Provides an abstraction layer to read from and write to files, databases, dumps, and streams
 
 using DataFrames
+using SQLite
 
-export iSourceMedia, FileSystemMedia, DatabaseMedia, SQLDumpMedia, ConsoleMedia
+export iSourceMedia, iMediaSource, FileSystemMedia, DatabaseMedia, SQLDumpMedia, ConsoleMedia
 
 """
     abstract type iSourceMedia
@@ -13,6 +14,7 @@ how they support reading, writing, or both for specific media types
 (filesystem, database, dump files, console streams, etc.).
 """
 abstract type iSourceMedia end
+const iMediaSource = iSourceMedia
 
 """
     FileSystemMedia(path::String; format::Symbol=:auto)
@@ -32,27 +34,82 @@ struct FileSystemMedia <: iSourceMedia
 end
 
 """
-    DatabaseMedia(connection; query::Union{String,Nothing}=nothing, params=nothing)
+    DatabaseMedia(locator::String; db_type::Symbol=:sqlite)
+    DatabaseMedia(connection; db_type::Symbol=:sqlite)
 
-A media backend for database connections. Depending on the operation, it can be
-used for reading (queries/tables) and writing (e.g. logger database sinks).
+A media backend for database sources. Depending on the operation, it can be
+used for reading (queries) and writing (tables).
 
 # Arguments
-- `connection`: Database connection object
-- `query::Union{String,Nothing}`: SQL query to execute (optional, can be provided to read_dataframe instead)
-- `params`: Optional query parameters
+- `locator::String`: Database path/URL (for example `"test.db"`, `":memory:"`, or `"sqlite:///tmp/test.db"`)
+- `db_type::Symbol`: Database type. Currently supported: `:sqlite`
+- `connection`: Optional pre-opened database connection for compatibility
 
 # Note
-You can provide a query here or pass a table name to read_dataframe.
+For `read_dataframe`, pass `query` (or `table`) to the function call.
+When constructed from `locator`, the database connection is opened immediately.
 """
 struct DatabaseMedia <: iSourceMedia
+    locator::Union{String,Nothing}
+    db_type::Symbol
     connection::Any
-    query::Union{String,Nothing}
-    params::Any
-    
-    function DatabaseMedia(connection; query::Union{String,Nothing}=nothing, params=nothing)
-        new(connection, query, params)
+
+    function DatabaseMedia(locator::String; db_type::Symbol=:sqlite)
+        if !(db_type in [:sqlite])
+            throw(ArgumentError("Unsupported db_type: $db_type. Currently supported: :sqlite"))
+        end
+        db_path = _sqlite_path_from_locator(locator)
+        conn = SQLite.DB(db_path)
+        new(locator, db_type, conn)
     end
+
+    function DatabaseMedia(connection; db_type::Symbol=:sqlite)
+        if !(db_type in [:sqlite])
+            throw(ArgumentError("Unsupported db_type: $db_type. Currently supported: :sqlite"))
+        end
+        new(nothing, db_type, connection)
+    end
+end
+
+function _sqlite_path_from_locator(locator::String)
+    if startswith(locator, "sqlite:///")
+        return locator[11:end]
+    elseif startswith(locator, "sqlite://")
+        return locator[10:end]
+    else
+        return locator
+    end
+end
+
+function _open_database_connection(source::DatabaseMedia)
+    if source.connection !== nothing
+        return source.connection, false
+    end
+
+    if source.db_type == :sqlite
+        if isnothing(source.locator)
+            throw(ArgumentError("DatabaseMedia requires a locator or a pre-opened connection"))
+        end
+        db_path = _sqlite_path_from_locator(source.locator)
+        return SQLite.DB(db_path), true
+    end
+
+    throw(ArgumentError("Unsupported db_type: $(source.db_type). Currently supported: :sqlite"))
+end
+
+function _with_database_connection(source::DatabaseMedia, f::Function)
+    conn, should_close = _open_database_connection(source)
+    try
+        return f(conn)
+    finally
+        if should_close && conn isa SQLite.DB
+            SQLite.close(conn)
+        end
+    end
+end
+
+function _with_database_connection(f::Function, source::DatabaseMedia)
+    return _with_database_connection(source, f)
 end
 
 """

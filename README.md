@@ -31,19 +31,19 @@ Use the Media interface for a unified read/write abstraction across different me
 ```julia
 using MyJuliaToolbox.IO
 
-# Read from file
-csv_source = FileSystemMedia("data.csv")
-df = read_dataframe(csv_source)
+# Read from file in a folder
+csv_source = FileSystemMedia("data")
+df = read_dataframe(csv_source, "data.csv")
 
 # Read from database
 using SQLite
 db = SQLite.DB("mydata.db")
-db_source = DatabaseMedia(db, table="users")
-df = read_dataframe(db_source)
+db_source = DatabaseMedia(db)
+df = read_dataframe(db_source, table="users")
 
 # Custom SQL query
-query_source = DatabaseMedia(db, query="SELECT * FROM users WHERE age > 30")
-df = read_dataframe(query_source)
+query_source = DatabaseMedia(db)
+df = read_dataframe(query_source, query="SELECT * FROM users WHERE age > 30")
 ```
 
 ### Async logging

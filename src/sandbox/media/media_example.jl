@@ -76,8 +76,8 @@ println(first(df_table, 5))
 
 # Read with custom query using DatabaseMedia
 println("\nQuerying users with age > 30 (query in DatabaseMedia):")
-query_source = DatabaseMedia(db, query="SELECT * FROM users WHERE age > 30")
-df_query = read_dataframe(query_source)
+query_source = DatabaseMedia(db)
+df_query = read_dataframe(query_source, query="SELECT * FROM users WHERE age > 30")
 println(df_query)
 
 # Read with query passed directly to read_dataframe
