@@ -16,7 +16,7 @@ how they support reading, writing, or both for specific media types
 abstract type iSourceMedia end
 
 """
-    FileSystemMedia(path::String; format::Symbol=:auto, parameters_locator::Union{String,Nothing}=nothing)
+    FileSystemMedia(path::String; format::Symbol=:auto)
 
 A media backend for file-system paths. Depending on the operation, it can be used
 for reading (e.g. `read_dataframe`) and writing (e.g. logger/file sinks).
@@ -24,14 +24,12 @@ for reading (e.g. `read_dataframe`) and writing (e.g. logger/file sinks).
 # Arguments
 - `path::String`: Path to the file
 - `format::Symbol`: Format of the file (`:csv`, `:arrow`, `:auto`). Default is `:auto`
-- `parameters_locator::Union{String,Nothing}`: Optional path/URL root used by `read_parameters`
 """
 struct FileSystemMedia <: iSourceMedia
     path::String
     format::Symbol
-    parameters_locator::Union{String,Nothing}
     
-    FileSystemMedia(path::String; format::Symbol=:auto, parameters_locator::Union{String,Nothing}=nothing) = new(path, format, parameters_locator)
+    FileSystemMedia(path::String; format::Symbol=:auto) = new(path, format)
 end
 
 """
@@ -116,7 +114,7 @@ function _with_database_connection(f::Function, source::DatabaseMedia)
 end
 
 """
-    SQLDumpMedia(path::String; db_type::Symbol=:mysql, in_memory::Bool=true)
+    SQLDumpMedia(path::String; db_type::Symbol=:mysql, in_memory::Bool=true, parameters_locator::Union{String,Nothing}=nothing)
 
 A media backend that reads from SQL dump files (MySQL, PostgreSQL, etc.).
 
@@ -127,6 +125,7 @@ with automatic syntax conversion from the source database type to SQLite.
 - `path::String`: Path to the SQL dump file
 - `db_type::Symbol`: Type of source database (`:mysql` or `:postgresql`). Default is `:mysql`
 - `in_memory::Bool`: Whether to use an in-memory SQLite database. Default is `true`
+- `parameters_locator::Union{String,Nothing}`: Optional path/URL root used by `read_parameters`
 
 # Example
 ```julia
@@ -142,15 +141,16 @@ struct SQLDumpMedia <: iSourceMedia
     path::String
     db_type::Symbol
     in_memory::Bool
+    parameters_locator::Union{String,Nothing}
     
-    function SQLDumpMedia(path::String; db_type::Symbol=:mysql, in_memory::Bool=true)
+    function SQLDumpMedia(path::String; db_type::Symbol=:mysql, in_memory::Bool=true, parameters_locator::Union{String,Nothing}=nothing)
         if !isfile(path)
             throw(ArgumentError("SQL dump file not found: $path"))
         end
         if !(db_type in [:mysql, :postgresql])
             throw(ArgumentError("Unsupported db_type: $db_type. Must be :mysql or :postgresql"))
         end
-        new(path, db_type, in_memory)
+        new(path, db_type, in_memory, parameters_locator)
     end
 end
 

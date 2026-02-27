@@ -195,10 +195,6 @@ using SQLite
                 write(io, read(json_path, String))
             end
 
-            fs_with_parameters = FileSystemMedia(temp_dir, parameters_locator=params_root)
-            params_from_fs_locator = read_parameters(ModelParameters, fs_with_parameters, "model.json")
-            @test params_from_fs_locator.name == "fs-model"
-
             db_source = DatabaseMedia(":memory:", parameters_locator=params_root)
             try
                 params_from_db_locator = read_parameters(ModelParameters, db_source, "model.json")

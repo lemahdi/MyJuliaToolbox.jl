@@ -32,7 +32,6 @@ using SQLite
         source = FileSystemMedia(temp_dir, format=:csv)
         @test source.path == temp_dir
         @test source.format == :csv
-        @test source.parameters_locator === nothing
 
         df = read_dataframe(source, "test.csv")
         @test df isa DataFrame

@@ -1,4 +1,5 @@
 using Test
+using MyJuliaToolbox
 using MyJuliaToolbox.IO
 using DataFrames
 using SQLite
@@ -186,6 +187,78 @@ using SQLite
             df = read_dataframe(source, table="test_table")
             @test nrow(df) == 1
             @test df.value[1] == "test"
+        end
+    end
+    
+    # ====================================================================
+    # SQLDumpMedia with read_parameters
+    # ====================================================================
+    @testset "SQLDumpMedia with read_parameters" begin
+        # Define parameter types for testing
+        struct DumpOptimizerParams <: iParameters
+            learning_rate::Float64
+            beta1::Float64
+        end
+
+        struct DumpModelParams <: iParameters
+            name::String
+            epochs::Int
+            enabled::Bool
+            optimizer::DumpOptimizerParams
+            tags::Vector{String}
+        end
+
+        dump_file = joinpath(temp_dir, "test_dump.sql")
+        open(dump_file, "w") do f
+            write(f, """
+            CREATE TABLE dummy (id INT);
+            INSERT INTO dummy VALUES (1);
+            """)
+        end
+
+        params_root = mktempdir()
+        try
+            json_path = joinpath(params_root, "config.json")
+            open(json_path, "w") do io
+                write(io, """
+                {
+                  "name": "dump-model",
+                  "epochs": 100,
+                  "enabled": true,
+                  "optimizer": {
+                    "learning_rate": 0.001,
+                    "beta1": 0.95
+                  },
+                  "tags": ["sql", "dump"]
+                }
+                """)
+            end
+
+            # Test SQLDumpMedia with parameters_locator
+            source_with_locator = SQLDumpMedia(dump_file, db_type=:mysql, parameters_locator=params_root)
+            @test source_with_locator.parameters_locator == params_root
+            
+            params = read_parameters(DumpModelParams, source_with_locator, "config.json")
+            @test params.name == "dump-model"
+            @test params.epochs == 100
+            @test params.optimizer.learning_rate == 0.001
+            @test params.optimizer.beta1 == 0.95
+            @test params.tags == ["sql", "dump"]
+
+            # Test SQLDumpMedia without parameters_locator throws error
+            source_without_locator = SQLDumpMedia(dump_file, db_type=:mysql)
+            @test source_without_locator.parameters_locator === nothing
+            
+            missing_locator_error = try
+                read_parameters(DumpModelParams, source_without_locator, "config.json")
+                nothing
+            catch err
+                err
+            end
+            @test missing_locator_error isa ArgumentError
+            @test occursin("requires `parameters_locator`", string(missing_locator_error))
+        finally
+            rm(params_root; recursive=true, force=true)
         end
     end
     

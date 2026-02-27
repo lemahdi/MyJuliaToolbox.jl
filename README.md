@@ -47,11 +47,8 @@ query_source = DatabaseMedia(db)
 df = read_dataframe(query_source, query="SELECT * FROM users WHERE age > 30")
 
 # Use a dedicated parameters location for read_parameters
-params_fs = FileSystemMedia("data"; parameters_locator="configs")
-params = read_parameters(MyParams, params_fs, "model.json")
-
 params_db = DatabaseMedia(db; parameters_locator="configs")
-params2 = read_parameters(MyParams, params_db, "model.json")
+params = read_parameters(MyParams, params_db, "model.json")
 ```
 
 ### Async logging

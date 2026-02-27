@@ -72,8 +72,7 @@ function _read_parameters_impl(::Type{T}, source::IO.FileSystemMedia, file_name:
         throw(ArgumentError("Invalid parameter file '$file_name': expected a .json file."))
     end
 
-    locator = isnothing(source.parameters_locator) ? source.path : source.parameters_locator
-    full_path = _resolve_parameters_location(locator, file_name, relative_path)
+    full_path = _resolve_parameters_location(source.path, file_name, relative_path)
 
     if _is_url(full_path)
         return _parameters_from_url(T, full_path)
@@ -92,6 +91,26 @@ function _read_parameters_impl(::Type{T}, source::IO.DatabaseMedia, file_name::A
     end
 
     isnothing(source.parameters_locator) && throw(ArgumentError("DatabaseMedia requires `parameters_locator` to read parameter files."))
+
+    full_path = _resolve_parameters_location(source.parameters_locator, file_name, relative_path)
+
+    if _is_url(full_path)
+        return _parameters_from_url(T, full_path)
+    end
+
+    if !isfile(full_path)
+        throw(ArgumentError("Parameter file not found: $full_path"))
+    end
+
+    return parameters_from_json(T, full_path)
+end
+
+function _read_parameters_impl(::Type{T}, source::IO.SQLDumpMedia, file_name::AbstractString, relative_path::AbstractString) where {T <: iParameters}
+    if lowercase(splitext(file_name)[2]) != ".json"
+        throw(ArgumentError("Invalid parameter file '$file_name': expected a .json file."))
+    end
+
+    isnothing(source.parameters_locator) && throw(ArgumentError("SQLDumpMedia requires `parameters_locator` to read parameter files."))
 
     full_path = _resolve_parameters_location(source.parameters_locator, file_name, relative_path)
 
