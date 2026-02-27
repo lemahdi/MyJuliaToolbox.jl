@@ -4,7 +4,7 @@
 using DataFrames
 using SQLite
 
-export iSourceMedia, iMediaSource, FileSystemMedia, DatabaseMedia, SQLDumpMedia, ConsoleMedia
+export iSourceMedia, FileSystemMedia, DatabaseMedia, SQLDumpMedia, ConsoleMedia
 
 """
     abstract type iSourceMedia
@@ -14,7 +14,6 @@ how they support reading, writing, or both for specific media types
 (filesystem, database, dump files, console streams, etc.).
 """
 abstract type iSourceMedia end
-const iMediaSource = iSourceMedia
 
 """
     FileSystemMedia(path::String; format::Symbol=:auto)
