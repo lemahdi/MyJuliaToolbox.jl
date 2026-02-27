@@ -2,6 +2,7 @@
 # Provides an abstraction layer for different parameter implementations
 
 using JSON
+using Downloads
 
 export iParameters, parameters_from_dict, parameters_from_json, read_parameters
 
@@ -71,8 +72,32 @@ function _read_parameters_impl(::Type{T}, source::IO.FileSystemMedia, file_name:
         throw(ArgumentError("Invalid parameter file '$file_name': expected a .json file."))
     end
 
-    source_root = isdir(source.path) ? source.path : dirname(source.path)
-    full_path = isempty(relative_path) ? joinpath(source_root, file_name) : joinpath(source_root, relative_path, file_name)
+    locator = isnothing(source.parameters_locator) ? source.path : source.parameters_locator
+    full_path = _resolve_parameters_location(locator, file_name, relative_path)
+
+    if _is_url(full_path)
+        return _parameters_from_url(T, full_path)
+    end
+
+    if !isfile(full_path)
+        throw(ArgumentError("Parameter file not found: $full_path"))
+    end
+
+    return parameters_from_json(T, full_path)
+end
+
+function _read_parameters_impl(::Type{T}, source::IO.DatabaseMedia, file_name::AbstractString, relative_path::AbstractString) where {T <: iParameters}
+    if lowercase(splitext(file_name)[2]) != ".json"
+        throw(ArgumentError("Invalid parameter file '$file_name': expected a .json file."))
+    end
+
+    isnothing(source.parameters_locator) && throw(ArgumentError("DatabaseMedia requires `parameters_locator` to read parameter files."))
+
+    full_path = _resolve_parameters_location(source.parameters_locator, file_name, relative_path)
+
+    if _is_url(full_path)
+        return _parameters_from_url(T, full_path)
+    end
 
     if !isfile(full_path)
         throw(ArgumentError("Parameter file not found: $full_path"))
@@ -83,6 +108,42 @@ end
 
 function _read_parameters_impl(::Type{T}, source::IO.iSourceMedia, file_name::AbstractString, relative_path::AbstractString) where {T <: iParameters}
     throw(ArgumentError("read_parameters is not implemented for media source type $(typeof(source))."))
+end
+
+function _resolve_parameters_location(locator::AbstractString, file_name::AbstractString, relative_path::AbstractString)
+    if _is_url(locator)
+        if _looks_like_json_file(locator)
+            return locator
+        end
+        relative_file = isempty(relative_path) ? String(file_name) : string(strip(relative_path, '/'), "/", file_name)
+        return string(rstrip(locator, '/'), "/", relative_file)
+    end
+
+    if _looks_like_json_file(locator)
+        return locator
+    end
+
+    source_root = isdir(locator) ? locator : dirname(locator)
+    return isempty(relative_path) ? joinpath(source_root, file_name) : joinpath(source_root, relative_path, file_name)
+end
+
+function _is_url(value::AbstractString)
+    return startswith(value, "http://") || startswith(value, "https://")
+end
+
+function _looks_like_json_file(value::AbstractString)
+    return lowercase(splitext(value)[2]) == ".json"
+end
+
+function _parameters_from_url(::Type{T}, url::AbstractString) where {T <: iParameters}
+    temp_path, temp_io = mktemp()
+    try
+        close(temp_io)
+        Downloads.download(url, temp_path)
+        return parameters_from_json(T, temp_path)
+    finally
+        rm(temp_path; force=true)
+    end
 end
 
 function _construct_from_dict(::Type{T}, data::AbstractDict) where {T}

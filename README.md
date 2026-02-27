@@ -30,6 +30,7 @@ Use the Media interface for a unified read/write abstraction across different me
 
 ```julia
 using MyJuliaToolbox.IO
+using MyJuliaToolbox
 
 # Read from file in a folder
 csv_source = FileSystemMedia("data")
@@ -44,6 +45,13 @@ df = read_dataframe(db_source, table="users")
 # Custom SQL query
 query_source = DatabaseMedia(db)
 df = read_dataframe(query_source, query="SELECT * FROM users WHERE age > 30")
+
+# Use a dedicated parameters location for read_parameters
+params_fs = FileSystemMedia("data"; parameters_locator="configs")
+params = read_parameters(MyParams, params_fs, "model.json")
+
+params_db = DatabaseMedia(db; parameters_locator="configs")
+params2 = read_parameters(MyParams, params_db, "model.json")
 ```
 
 ### Async logging
