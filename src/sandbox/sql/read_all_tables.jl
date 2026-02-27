@@ -1,5 +1,5 @@
 # Example: Read all tables from a MySQL SQL dump using MyJuliaToolbox
-# This script demonstrates using SQLDumpSource to load and query SQL dump files
+# This script demonstrates using SQLDumpMedia to load and query SQL dump files
 
 using MyJuliaToolbox.IO
 using DataFrames
@@ -11,11 +11,11 @@ sql_file_path = raw"E:\Users\mahdi\source\repos\RSU\db\rsu_exit_2026-02-09_19-48
 println("=== Reading All Tables from SQL Dump File ===\n")
 println("SQL File: $sql_file_path\n")
 
-# Create a SQLDumpSource
+# Create a SQLDumpMedia
 # This automatically handles MySQL→SQLite conversion
-println("Creating SQLDumpSource...")
-source = SQLDumpSource(sql_file_path, db_type=:mysql)
-println("✓ SQLDumpSource created\n")
+println("Creating SQLDumpMedia...")
+source = SQLDumpMedia(sql_file_path, db_type=:mysql)
+println("✓ SQLDumpMedia created\n")
 
 # Option 1: Get list of all tables (no table/query parameter)
 println("Retrieving table names...")
@@ -81,10 +81,10 @@ if "amot_maj" in table_names
 end
 
 println("\n" * "=" ^ 80)
-println("✓ Successfully demonstrated SQLDumpSource!")
+println("✓ Successfully demonstrated SQLDumpMedia!")
 println("\nUsage Summary:")
 println("  # Create source")
-println("  source = SQLDumpSource(\"dump.sql\", db_type=:mysql)")
+println("  source = SQLDumpMedia(\"dump.sql\", db_type=:mysql)")
 println()
 println("  # List all tables")
 println("  tables = read_dataframe(source)")

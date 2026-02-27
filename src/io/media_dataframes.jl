@@ -1,47 +1,47 @@
-# Additional read_dataframe methods for iMediaSource types
-# This file extends the read_dataframe function to work with iMediaSource objects
+# Additional read_dataframe methods for iSourceMedia types
+# This file extends the read_dataframe function to work with iSourceMedia objects
 
 using SQLite
 
 """
-    read_dataframe(source::FileSystemSource; kwargs...) -> DataFrame
+    read_dataframe(source::FileSystemMedia; kwargs...) -> DataFrame
 
-Read a DataFrame from a FileSystemSource.
+Read a DataFrame from a FileSystemMedia.
 
 # Arguments
-- `source::FileSystemSource`: The file system source to read from
+- `source::FileSystemMedia`: The file system source to read from
 - `kwargs...`: Additional keyword arguments passed to the underlying reader
 """
-function read_dataframe(source::FileSystemSource; kwargs...)
+function read_dataframe(source::FileSystemMedia; kwargs...)
     # Use the path-based read_dataframe function with the format from the source
     return read_dataframe(source.path; format=source.format, kwargs...)
 end
 
 """
-    read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
+    read_dataframe(source::DatabaseMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
 
-Read a DataFrame from a DatabaseSource.
+Read a DataFrame from a DatabaseMedia.
 
 # Arguments
-- `source::DatabaseSource`: The database source to read from  
+- `source::DatabaseMedia`: The database source to read from  
 - `table::Union{String,Nothing}`: Table name to read from
 - `query::Union{String,Nothing}`: SQL query to execute
 - `kwargs...`: Additional keyword arguments (currently unused)
 
 # Note
-Provide one of: `table` parameter, `query` parameter, or set `query` in DatabaseSource.
+Provide one of: `table` parameter, `query` parameter, or set `query` in DatabaseMedia.
 """
-function read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
+function read_dataframe(source::DatabaseMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
     # Count how many query sources are provided
     num_sources = (isnothing(table) ? 0 : 1) +
                   (isnothing(query) ? 0 : 1) +
                   (isnothing(source.query) ? 0 : 1)
     
     if num_sources == 0
-        error("Must provide either 'table' parameter, 'query' parameter, or 'query' in DatabaseSource")
+        error("Must provide either 'table' parameter, 'query' parameter, or 'query' in DatabaseMedia")
     end
     if num_sources > 1
-        error("Cannot provide multiple query sources. Choose one of: 'table' parameter, 'query' parameter, or 'query' in DatabaseSource")
+        error("Cannot provide multiple query sources. Choose one of: 'table' parameter, 'query' parameter, or 'query' in DatabaseMedia")
     end
     
     sql_query = if !isnothing(table)
@@ -81,12 +81,12 @@ function read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=not
 end
 
 """
-    read_dataframe(source::SQLDumpSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
+    read_dataframe(source::SQLDumpMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
 
-Read a DataFrame from a SQLDumpSource by loading the SQL dump into SQLite and querying it.
+Read a DataFrame from a SQLDumpMedia by loading the SQL dump into SQLite and querying it.
 
 # Arguments
-- `source::SQLDumpSource`: The SQL dump source to read from
+- `source::SQLDumpMedia`: The SQL dump source to read from
 - `table::Union{String,Nothing}`: Table name to read from (optional)
 - `query::Union{String,Nothing}`: SQL query to execute (optional)
 - `kwargs...`: Additional keyword arguments (currently unused)
@@ -99,7 +99,7 @@ Read a DataFrame from a SQLDumpSource by loading the SQL dump into SQLite and qu
 - The SQL dump is loaded into a SQLite database with automatic syntax conversion
 - For MySQL dumps, converts AUTO_INCREMENT, KEY definitions, and data types
 """
-function read_dataframe(source::SQLDumpSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
+function read_dataframe(source::SQLDumpMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
     if !isnothing(table) && !isnothing(query)
         error("Cannot provide both 'table' and 'query'. Choose one.")
     end
@@ -327,9 +327,9 @@ end
 
 """
 # Arguments
-- `source::iMediaSource`: Any media source type
+- `source::iSourceMedia`: Any media source type
 - `kwargs...`: Additional keyword arguments
 """
-function read_dataframe(source::iMediaSource; kwargs...)
-    error("read_dataframe not implemented for iMediaSource type: $(typeof(source))")
+function read_dataframe(source::iSourceMedia; kwargs...)
+    error("read_dataframe not implemented for iSourceMedia type: $(typeof(source))")
 end

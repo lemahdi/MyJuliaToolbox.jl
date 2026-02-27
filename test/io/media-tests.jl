@@ -1,4 +1,4 @@
-# Tests for Media interface (FileSystemSource, DatabaseSource, read_dataframe)
+# Tests for Media interface (FileSystemMedia, DatabaseMedia, read_dataframe)
 
 using Test
 using MyJuliaToolbox.IO
@@ -21,15 +21,15 @@ using SQLite
         )
     
     # ==================================================================
-    # FileSystemSource Tests
+    # FileSystemMedia Tests
     # ==================================================================
     
-    @testset "FileSystemSource - CSV" begin
+    @testset "FileSystemMedia - CSV" begin
         csv_path = joinpath(temp_dir, "test.csv")
         CSV.write(csv_path, test_df)
         
         # Test with explicit format
-        source = FileSystemSource(csv_path, format=:csv)
+        source = FileSystemMedia(csv_path, format=:csv)
         @test source.path == csv_path
         @test source.format == :csv
         
@@ -41,18 +41,18 @@ using SQLite
         @test df.age == test_df.age
         
         # Test with auto format
-        source_auto = FileSystemSource(csv_path)
+        source_auto = FileSystemMedia(csv_path)
         @test source_auto.format == :auto
         df_auto = read_dataframe(source_auto)
         @test nrow(df_auto) == 5
     end
     
-    @testset "FileSystemSource - Arrow" begin
+    @testset "FileSystemMedia - Arrow" begin
         arrow_path = joinpath(temp_dir, "test.arrow")
         Arrow.write(arrow_path, test_df)
         
         # Test with explicit format
-        source = FileSystemSource(arrow_path, format=:arrow)
+        source = FileSystemMedia(arrow_path, format=:arrow)
         @test source.path == arrow_path
         @test source.format == :arrow
         
@@ -64,41 +64,41 @@ using SQLite
         @test df.age == test_df.age
         
         # Test with auto format
-        source_auto = FileSystemSource(arrow_path)
+        source_auto = FileSystemMedia(arrow_path)
         df_auto = read_dataframe(source_auto)
         @test nrow(df_auto) == 5
     end
     
     # ==================================================================
-    # DatabaseSource Tests
+    # DatabaseMedia Tests
     # ==================================================================
     
-    @testset "DatabaseSource - Constructor" begin
+    @testset "DatabaseMedia - Constructor" begin
         db = SQLite.DB()  # In-memory database
         
         # Test with query only
-        source_query = DatabaseSource(db, query="SELECT * FROM users")
+        source_query = DatabaseMedia(db, query="SELECT * FROM users")
         @test source_query.query == "SELECT * FROM users"
         @test isnothing(source_query.params)
         
         # Test with query and params
-        source_params = DatabaseSource(db, query="SELECT * FROM users WHERE age > ?", params=[25])
+        source_params = DatabaseMedia(db, query="SELECT * FROM users WHERE age > ?", params=[25])
         @test source_params.query == "SELECT * FROM users WHERE age > ?"
         @test source_params.params == [25]
         
         # Test with no query (table will be passed to read_dataframe)
-        source_no_query = DatabaseSource(db)
+        source_no_query = DatabaseMedia(db)
         @test isnothing(source_no_query.query)
     end
     
-    @testset "DatabaseSource - SQLite read with table" begin
+    @testset "DatabaseMedia - SQLite read with table" begin
         db = SQLite.DB()  # In-memory database
         
         # Create table and insert data
         SQLite.load!(test_df, db, "test_users")
         
         # Read using table parameter in read_dataframe
-        source = DatabaseSource(db)
+        source = DatabaseMedia(db)
         df = read_dataframe(source, table="test_users")
         
         @test df isa DataFrame
@@ -108,14 +108,14 @@ using SQLite
         @test df.age == test_df.age
     end
     
-    @testset "DatabaseSource - SQLite read with query" begin
+    @testset "DatabaseMedia - SQLite read with query" begin
         db = SQLite.DB()  # In-memory database
         
         # Create table and insert data
         SQLite.load!(test_df, db, "test_users")
         
-        # Read using query in DatabaseSource
-        source = DatabaseSource(db, query="SELECT * FROM test_users WHERE age > 28")
+        # Read using query in DatabaseMedia
+        source = DatabaseMedia(db, query="SELECT * FROM test_users WHERE age > 28")
         df = read_dataframe(source)
         
         @test df isa DataFrame
@@ -123,18 +123,18 @@ using SQLite
         @test all(df.age .> 28)
         
         # Test with ORDER BY
-        source_ordered = DatabaseSource(db, query="SELECT * FROM test_users ORDER BY age DESC")
+        source_ordered = DatabaseMedia(db, query="SELECT * FROM test_users ORDER BY age DESC")
         df_ordered = read_dataframe(source_ordered)
         @test df_ordered.age == sort(test_df.age, rev=true)
         
         # Test with explicit query parameter in read_dataframe
-        source_no_query = DatabaseSource(db)
+        source_no_query = DatabaseMedia(db)
         df_query_param = read_dataframe(source_no_query, query="SELECT * FROM test_users WHERE age < 30")
         @test nrow(df_query_param) == 2  # Alice (25), Diana (28)
         @test all(df_query_param.age .< 30)
     end
     
-    @testset "DatabaseSource - SQLite with multiple tables" begin
+    @testset "DatabaseMedia - SQLite with multiple tables" begin
         db = SQLite.DB()  # In-memory database
         
         # Create first table
@@ -149,13 +149,13 @@ using SQLite
         SQLite.load!(products_df, db, "products")
         
         # Read from first table
-        source_users = DatabaseSource(db)
+        source_users = DatabaseMedia(db)
         df_users = read_dataframe(source_users, table="users")
         @test nrow(df_users) == 5
         @test "name" in names(df_users)
         
         # Read from second table
-        source_products = DatabaseSource(db)
+        source_products = DatabaseMedia(db)
         df_products = read_dataframe(source_products, table="products")
         @test nrow(df_products) == 3
         @test "product_name" in names(df_products)
@@ -170,7 +170,7 @@ using SQLite
             JOIN users u ON pu.user_id = u.id 
             JOIN products p ON pu.product_id = p.product_id
         """
-        source_join = DatabaseSource(db, query=join_query)
+        source_join = DatabaseMedia(db, query=join_query)
         df_join = read_dataframe(source_join)
         @test nrow(df_join) == 3
         @test "name" in names(df_join)
@@ -182,8 +182,8 @@ using SQLite
     # ==================================================================
     
     @testset "Media - Generic processing function" begin
-        # Function that works with any iMediaSource
-        function count_adults(source::iMediaSource; table=nothing)
+        # Function that works with any iSourceMedia
+        function count_adults(source::iSourceMedia; table=nothing)
             if isnothing(table)
                 df = read_dataframe(source)
             else
@@ -194,18 +194,18 @@ using SQLite
         
         # Test with CSV
         csv_path = joinpath(temp_dir, "test.csv")
-        csv_source = FileSystemSource(csv_path)
+        csv_source = FileSystemMedia(csv_path)
         @test count_adults(csv_source) == 3  # Bob, Charlie, Eve
         
         # Test with Arrow
         arrow_path = joinpath(temp_dir, "test.arrow")
-        arrow_source = FileSystemSource(arrow_path)
+        arrow_source = FileSystemMedia(arrow_path)
         @test count_adults(arrow_source) == 3
         
         # Test with Database
         db = SQLite.DB()
         SQLite.load!(test_df, db, "users")
-        db_source = DatabaseSource(db)
+        db_source = DatabaseMedia(db)
         @test count_adults(db_source, table="users") == 3
     end
     

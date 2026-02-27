@@ -1,38 +1,41 @@
-# Media interface for reading data from files or databases
-# Provides an abstraction layer to read data from different sources and return DataFrames
+# Media interface for reading and writing data across different media backends
+# Provides an abstraction layer to read from and write to files, databases, dumps, and streams
 
 using DataFrames
 
-export iMediaSource, FileSystemSource, DatabaseSource, SQLDumpSource, ConsoleSource
+export iSourceMedia, FileSystemMedia, DatabaseMedia, SQLDumpMedia, ConsoleMedia
 
 """
-    abstract type iMediaSource
+    abstract type iSourceMedia
 
-Abstract base type for media data sources. Concrete implementations should define
-how to read data from specific sources (filesystem, database, etc.).
+Abstract base type for media backends. Concrete implementations should define
+how they support reading, writing, or both for specific media types
+(filesystem, database, dump files, console streams, etc.).
 """
-abstract type iMediaSource end
+abstract type iSourceMedia end
 
 """
-    FileSystemSource(path::String; format::Symbol=:auto)
+    FileSystemMedia(path::String; format::Symbol=:auto)
 
-A media source that reads from the file system.
+A media backend for file-system paths. Depending on the operation, it can be used
+for reading (e.g. `read_dataframe`) and writing (e.g. logger/file sinks).
 
 # Arguments
 - `path::String`: Path to the file
 - `format::Symbol`: Format of the file (`:csv`, `:arrow`, `:auto`). Default is `:auto`
 """
-struct FileSystemSource <: iMediaSource
+struct FileSystemMedia <: iSourceMedia
     path::String
     format::Symbol
     
-    FileSystemSource(path::String; format::Symbol=:auto) = new(path, format)
+    FileSystemMedia(path::String; format::Symbol=:auto) = new(path, format)
 end
 
 """
-    DatabaseSource(connection; query::Union{String,Nothing}=nothing, params=nothing)
+    DatabaseMedia(connection; query::Union{String,Nothing}=nothing, params=nothing)
 
-A media source that reads from a database.
+A media backend for database connections. Depending on the operation, it can be
+used for reading (queries/tables) and writing (e.g. logger database sinks).
 
 # Arguments
 - `connection`: Database connection object
@@ -42,20 +45,20 @@ A media source that reads from a database.
 # Note
 You can provide a query here or pass a table name to read_dataframe.
 """
-struct DatabaseSource <: iMediaSource
+struct DatabaseMedia <: iSourceMedia
     connection::Any
     query::Union{String,Nothing}
     params::Any
     
-    function DatabaseSource(connection; query::Union{String,Nothing}=nothing, params=nothing)
+    function DatabaseMedia(connection; query::Union{String,Nothing}=nothing, params=nothing)
         new(connection, query, params)
     end
 end
 
 """
-    SQLDumpSource(path::String; db_type::Symbol=:mysql, in_memory::Bool=true)
+    SQLDumpMedia(path::String; db_type::Symbol=:mysql, in_memory::Bool=true)
 
-A media source that reads from SQL dump files (MySQL, PostgreSQL, etc.).
+A media backend that reads from SQL dump files (MySQL, PostgreSQL, etc.).
 
 This source loads a SQL dump file into a SQLite database (in-memory by default)
 with automatic syntax conversion from the source database type to SQLite.
@@ -67,20 +70,20 @@ with automatic syntax conversion from the source database type to SQLite.
 
 # Example
 ```julia
-source = SQLDumpSource("dump.sql", db_type=:mysql)
+source = SQLDumpMedia("dump.sql", db_type=:mysql)
 df = read_dataframe(source, table="users")
 ```
 
 # Note
 For complex databases with advanced features, consider using dedicated conversion tools
-like mysql2sqlite or pg2sqlite before loading with DatabaseSource.
+like mysql2sqlite or pg2sqlite before loading with DatabaseMedia.
 """
-struct SQLDumpSource <: iMediaSource
+struct SQLDumpMedia <: iSourceMedia
     path::String
     db_type::Symbol
     in_memory::Bool
     
-    function SQLDumpSource(path::String; db_type::Symbol=:mysql, in_memory::Bool=true)
+    function SQLDumpMedia(path::String; db_type::Symbol=:mysql, in_memory::Bool=true)
         if !isfile(path)
             throw(ArgumentError("SQL dump file not found: $path"))
         end
@@ -92,15 +95,15 @@ struct SQLDumpSource <: iMediaSource
 end
 
 """
-    ConsoleSource(; stream::Base.IO=stdout)
+    ConsoleMedia(; stream::Base.IO=stdout)
 
-A media source that writes to a console-like stream.
+A media backend that writes to a console-like stream.
 
 # Arguments
 - `stream::Base.IO`: Output stream to write logs/messages to. Default is `stdout`.
 """
-struct ConsoleSource <: iMediaSource
+struct ConsoleMedia <: iSourceMedia
     stream::Base.IO
 end
 
-ConsoleSource(; stream::Base.IO=stdout) = ConsoleSource(stream)
+ConsoleMedia(; stream::Base.IO=stdout) = ConsoleMedia(stream)

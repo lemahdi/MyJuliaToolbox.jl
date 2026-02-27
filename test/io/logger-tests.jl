@@ -6,9 +6,9 @@ using SQLite
 using Dates
 
 @testset "Async logger tests" begin
-    @testset "ConsoleSource sink" begin
+    @testset "ConsoleMedia sink" begin
         buffer = IOBuffer()
-        source = ConsoleSource(stream=buffer)
+        source = ConsoleMedia(stream=buffer)
         logger = AsyncLogger(source; min_level=:debug, capacity=32)
 
         @test log_info!(logger, "console message")
@@ -20,11 +20,11 @@ using Dates
         @test occursin("[INFO]", output)
     end
 
-    @testset "FileSystemSource sink" begin
+    @testset "FileSystemMedia sink" begin
         temp_dir = mktempdir()
         try
             log_path = joinpath(temp_dir, "app.log")
-            source = FileSystemSource(log_path)
+            source = FileSystemMedia(log_path)
             logger = AsyncLogger(source; min_level=:info, capacity=64)
 
             for i in 1:10
@@ -44,9 +44,9 @@ using Dates
         end
     end
 
-    @testset "DatabaseSource sink (SQLite)" begin
+    @testset "DatabaseMedia sink (SQLite)" begin
         db = SQLite.DB()
-        source = DatabaseSource(db)
+        source = DatabaseMedia(db)
         logger = AsyncLogger(source; min_level=:debug, capacity=64, table="test_logs")
 
         @test log_warn!(logger, "db message", metadata=(request_id=42,))
@@ -58,7 +58,7 @@ using Dates
         @test df.message[1] == "db message"
         @test occursin("request_id", df.metadata[1])
 
-        query_source = DatabaseSource(db, query="SELECT level, message, metadata FROM test_logs")
+        query_source = DatabaseMedia(db, query="SELECT level, message, metadata FROM test_logs")
         df_via_source = read_dataframe(query_source)
         @test nrow(df_via_source) == 1
         @test df_via_source.level[1] == "warn"
@@ -72,9 +72,9 @@ using Dates
         SQLite.close(db)
     end
 
-    @testset "DatabaseSource rejects invalid table names" begin
+    @testset "DatabaseMedia rejects invalid table names" begin
         db = SQLite.DB()
-        source = DatabaseSource(db)
+        source = DatabaseMedia(db)
         record = MyJuliaToolbox.IO.LogRecord(now(Dates.UTC), :info, "message", nothing)
 
         invalid_names = [
@@ -98,7 +98,7 @@ using Dates
 
     @testset "Queue overflow drops messages" begin
         buffer = IOBuffer()
-        source = ConsoleSource(stream=buffer)
+        source = ConsoleMedia(stream=buffer)
         logger = AsyncLogger(source; min_level=:debug, capacity=2)
 
         accepted = 0

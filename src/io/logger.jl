@@ -120,19 +120,19 @@ function _dropped(queue::_LogRingBuffer)
 end
 
 """
-    AsyncLogger(source::iMediaSource; min_level::Symbol=:info, capacity::Int=1024, sink_kwargs...)
+    AsyncLogger(source::iSourceMedia; min_level::Symbol=:info, capacity::Int=1024, sink_kwargs...)
 
 Asynchronous logger that queues records in-memory and writes them from a background task,
 so main execution paths are not blocked by sink IO.
 
 # Arguments
-- `source::iMediaSource`: Destination sink (e.g. `FileSystemSource`, `DatabaseSource`, `ConsoleSource`)
+- `source::iSourceMedia`: Destination sink (e.g. `FileSystemMedia`, `DatabaseMedia`, `ConsoleMedia`)
 - `min_level::Symbol`: Minimum accepted level (`:debug`, `:info`, `:warn`, `:error`)
 - `capacity::Int`: Ring buffer size. When full, new logs are dropped.
-- `sink_kwargs...`: Additional sink-specific options (e.g. `table="logs"` for `DatabaseSource`)
+- `sink_kwargs...`: Additional sink-specific options (e.g. `table="logs"` for `DatabaseMedia`)
 """
 mutable struct AsyncLogger
-    source::iMediaSource
+    source::iSourceMedia
     min_level::Symbol
     sink_kwargs::NamedTuple
     queue::_LogRingBuffer
@@ -169,7 +169,7 @@ function _validated_sql_identifier(identifier::String; field::String="identifier
     return identifier
 end
 
-function write_log_record(source::FileSystemSource, record::LogRecord; kwargs...)
+function write_log_record(source::FileSystemMedia, record::LogRecord; kwargs...)
     path = source.path
     dir = dirname(path)
     if !isempty(dir)
@@ -181,13 +181,13 @@ function write_log_record(source::FileSystemSource, record::LogRecord; kwargs...
     return nothing
 end
 
-function write_log_record(source::ConsoleSource, record::LogRecord; kwargs...)
+function write_log_record(source::ConsoleMedia, record::LogRecord; kwargs...)
     println(source.stream, _format_record(record))
     flush(source.stream)
     return nothing
 end
 
-function write_log_record(source::DatabaseSource, record::LogRecord; table::String="logs", kwargs...)
+function write_log_record(source::DatabaseMedia, record::LogRecord; table::String="logs", kwargs...)
     if !(source.connection isa SQLite.DB)
         throw(ArgumentError("Database logging currently supports only SQLite.DB connections"))
     end
@@ -213,15 +213,15 @@ function write_log_record(source::DatabaseSource, record::LogRecord; table::Stri
     return nothing
 end
 
-function write_log_record(source::SQLDumpSource, record::LogRecord; kwargs...)
-    throw(ArgumentError("SQLDumpSource is read-only and cannot be used as a logging sink"))
+function write_log_record(source::SQLDumpMedia, record::LogRecord; kwargs...)
+    throw(ArgumentError("SQLDumpMedia is read-only and cannot be used as a logging sink"))
 end
 
-function write_log_record(source::iMediaSource, record::LogRecord; kwargs...)
+function write_log_record(source::iSourceMedia, record::LogRecord; kwargs...)
     throw(ArgumentError("write_log_record not implemented for source type $(typeof(source))"))
 end
 
-function _log_worker_loop(source::iMediaSource, queue::_LogRingBuffer, sink_kwargs::NamedTuple)
+function _log_worker_loop(source::iSourceMedia, queue::_LogRingBuffer, sink_kwargs::NamedTuple)
     while true
         record = _dequeue!(queue)
         if isnothing(record)
@@ -236,7 +236,7 @@ function _log_worker_loop(source::iMediaSource, queue::_LogRingBuffer, sink_kwar
     return nothing
 end
 
-function AsyncLogger(source::iMediaSource; min_level::Symbol=:info, capacity::Int=1024, sink_kwargs...)
+function AsyncLogger(source::iSourceMedia; min_level::Symbol=:info, capacity::Int=1024, sink_kwargs...)
     _should_log(min_level, min_level)
     queue = _LogRingBuffer(capacity)
     sink_kwargs_nt = (; sink_kwargs...)

@@ -3,7 +3,7 @@ using MyJuliaToolbox.IO
 using DataFrames
 using SQLite
 
-@testset "SQLDumpSource Tests" begin
+@testset "SQLDumpMedia Tests" begin
     # Create a temporary SQL dump file for testing
     temp_dir = mktempdir()
     
@@ -42,20 +42,20 @@ using SQLite
         
         @testset "Constructor" begin
             # Valid construction
-            source = SQLDumpSource(mysql_dump, db_type=:mysql)
+            source = SQLDumpMedia(mysql_dump, db_type=:mysql)
             @test source.path == mysql_dump
             @test source.db_type == :mysql
             @test source.in_memory == true
             
             # Invalid db_type
-            @test_throws ArgumentError SQLDumpSource(mysql_dump, db_type=:oracle)
+            @test_throws ArgumentError SQLDumpMedia(mysql_dump, db_type=:oracle)
             
             # Non-existent file
-            @test_throws ArgumentError SQLDumpSource("nonexistent.sql")
+            @test_throws ArgumentError SQLDumpMedia("nonexistent.sql")
         end
         
         @testset "List Tables" begin
-            source = SQLDumpSource(mysql_dump, db_type=:mysql)
+            source = SQLDumpMedia(mysql_dump, db_type=:mysql)
             tables_df = read_dataframe(source)
             
             @test nrow(tables_df) == 2
@@ -64,7 +64,7 @@ using SQLite
         end
         
         @testset "Read Table" begin
-            source = SQLDumpSource(mysql_dump, db_type=:mysql)
+            source = SQLDumpMedia(mysql_dump, db_type=:mysql)
             
             # Read users table
             users_df = read_dataframe(source, table="users")
@@ -82,7 +82,7 @@ using SQLite
         end
         
         @testset "Custom Query" begin
-            source = SQLDumpSource(mysql_dump, db_type=:mysql)
+            source = SQLDumpMedia(mysql_dump, db_type=:mysql)
             
             # Query with WHERE clause
             df = read_dataframe(source, query="SELECT * FROM users WHERE age > 30")
@@ -96,7 +96,7 @@ using SQLite
         end
         
         @testset "Type Conversions" begin
-            source = SQLDumpSource(mysql_dump, db_type=:mysql)
+            source = SQLDumpMedia(mysql_dump, db_type=:mysql)
             users_df = read_dataframe(source, table="users")
             
             # Check that data types are correctly converted
@@ -129,13 +129,13 @@ using SQLite
         end
         
         @testset "Constructor" begin
-            source = SQLDumpSource(pg_dump, db_type=:postgresql)
+            source = SQLDumpMedia(pg_dump, db_type=:postgresql)
             @test source.path == pg_dump
             @test source.db_type == :postgresql
         end
         
         @testset "Read Table" begin
-            source = SQLDumpSource(pg_dump, db_type=:postgresql)
+            source = SQLDumpMedia(pg_dump, db_type=:postgresql)
             
             # Read employees table
             employees_df = read_dataframe(source, table="employees")
@@ -176,7 +176,7 @@ using SQLite
         end
         
         @testset "Handles Various SQL Commands" begin
-            source = SQLDumpSource(edge_dump, db_type=:mysql)
+            source = SQLDumpMedia(edge_dump, db_type=:mysql)
             
             # Should successfully parse despite SET, LOCK, UNLOCK commands
             tables_df = read_dataframe(source)
