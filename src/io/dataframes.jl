@@ -6,7 +6,7 @@ using Arrow
 using Tables
 using CodecZlib
 
-# Import iMediaSource types from media.jl (will be included after this file)
+# Import iSourceMedia types from media.jl (will be included after this file)
 # We'll add methods after media.jl is loaded
 
 export read_csv_to_df, read_arrow_to_df, read_dataframe, write_dataframe
@@ -53,10 +53,10 @@ function read_dataframe(tbl; format::Symbol = :auto, kwargs...)
         query = get(Dict(kwargs), :query, nothing)
         params = get(Dict(kwargs), :params, nothing)
         
-        # Create a DatabaseSource without query (will be passed to read_dataframe)
-        source = DatabaseSource(tbl)
+        # Create a DatabaseMedia without query (will be passed to read_dataframe)
+        source = DatabaseMedia(tbl)
         
-        # Call the DatabaseSource version of read_dataframe with table/query parameters
+        # Call the DatabaseMedia version of read_dataframe with table/query parameters
         return read_dataframe(source; table=table, query=query)
     elseif Tables.istable(tbl)
         return DataFrame(tbl)
@@ -120,10 +120,10 @@ function read_dataframe(io::Base.IO; format::Symbol = :auto, kwargs...)
         query = get(Dict(kwargs), :query, nothing)
         params = get(Dict(kwargs), :params, nothing)
         
-        # Create a DatabaseSource without query (will be passed to read_dataframe)
-        source = DatabaseSource(io)
+        # Create a DatabaseMedia without query (will be passed to read_dataframe)
+        source = DatabaseMedia(io)
         
-        # Call the DatabaseSource version of read_dataframe with table/query parameters
+        # Call the DatabaseMedia version of read_dataframe with table/query parameters
         return read_dataframe(source; table=table, query=query)
     elseif format == :arrow
         tbl = Arrow.Table(io; kwargs...)
@@ -259,5 +259,5 @@ function write_dataframe(io::Base.IO, df::DataFrame; format::Symbol = :auto, kwa
     return nothing
 end
 
-# Note: Additional read_dataframe methods for iMediaSource types
+# Note: Additional read_dataframe methods for iSourceMedia types
 # will be defined after media.jl is included in io.jl

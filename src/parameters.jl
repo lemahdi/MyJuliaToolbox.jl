@@ -51,22 +51,22 @@ function parameters_from_dict(::Type{T}, data::AbstractDict) where {T <: iParame
 end
 
 """
-    read_parameters(::Type{T}, source::IO.iMediaSource, file_name::AbstractString, relative_path::AbstractString="") where {T <: iParameters}
+    read_parameters(::Type{T}, source::IO.iSourceMedia, file_name::AbstractString, relative_path::AbstractString="") where {T <: iParameters}
 
 Read parameter configuration from a JSON file resolved from the provided media source and
 construct a concrete `iParameters` subtype.
 
 # Arguments
 - `T`: Target parameter type
-- `source`: Media source (currently supports `IO.FileSystemSource`)
+- `source`: Media source (currently supports `IO.FileSystemMedia`)
 - `file_name`: Configuration file name (must be `.json`)
 - `relative_path`: Optional relative path under the source root
 """
-function read_parameters(::Type{T}, source::IO.iMediaSource, file_name::AbstractString, relative_path::AbstractString="") where {T <: iParameters}
+function read_parameters(::Type{T}, source::IO.iSourceMedia, file_name::AbstractString, relative_path::AbstractString="") where {T <: iParameters}
     return _read_parameters_impl(T, source, file_name, relative_path)
 end
 
-function _read_parameters_impl(::Type{T}, source::IO.FileSystemSource, file_name::AbstractString, relative_path::AbstractString) where {T <: iParameters}
+function _read_parameters_impl(::Type{T}, source::IO.FileSystemMedia, file_name::AbstractString, relative_path::AbstractString) where {T <: iParameters}
     if lowercase(splitext(file_name)[2]) != ".json"
         throw(ArgumentError("Invalid parameter file '$file_name': expected a .json file."))
     end
@@ -81,7 +81,7 @@ function _read_parameters_impl(::Type{T}, source::IO.FileSystemSource, file_name
     return parameters_from_json(T, full_path)
 end
 
-function _read_parameters_impl(::Type{T}, source::IO.iMediaSource, file_name::AbstractString, relative_path::AbstractString) where {T <: iParameters}
+function _read_parameters_impl(::Type{T}, source::IO.iSourceMedia, file_name::AbstractString, relative_path::AbstractString) where {T <: iParameters}
     throw(ArgumentError("read_parameters is not implemented for media source type $(typeof(source))."))
 end
 

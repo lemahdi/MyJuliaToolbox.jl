@@ -1,4 +1,4 @@
-# Tests for Media interface (FileSystemSource, DatabaseSource, read_dataframe)
+# Tests for Media interface (FileSystemMedia, DatabaseMedia, read_dataframe)
 
 using Test
 using MyJuliaToolbox.IO
@@ -21,84 +21,123 @@ using SQLite
         )
     
     # ==================================================================
-    # FileSystemSource Tests
+    # FileSystemMedia Tests
     # ==================================================================
     
-    @testset "FileSystemSource - CSV" begin
+    @testset "FileSystemMedia - CSV" begin
         csv_path = joinpath(temp_dir, "test.csv")
         CSV.write(csv_path, test_df)
-        
-        # Test with explicit format
-        source = FileSystemSource(csv_path, format=:csv)
-        @test source.path == csv_path
+
+        # Test with folder path + filename
+        source = FileSystemMedia(temp_dir, format=:csv)
+        @test source.path == temp_dir
         @test source.format == :csv
-        
-        df = read_dataframe(source)
+
+        df = read_dataframe(source, "test.csv")
         @test df isa DataFrame
         @test nrow(df) == 5
         @test ncol(df) == 4
         @test df.name == test_df.name
         @test df.age == test_df.age
-        
+
+        # write via media source + filename
+        write_dataframe(source, "written.csv", test_df)
+        df_written = read_dataframe(source, "written.csv")
+        @test nrow(df_written) == 5
+        @test df_written.name == test_df.name
+
         # Test with auto format
-        source_auto = FileSystemSource(csv_path)
+        source_auto = FileSystemMedia(temp_dir)
         @test source_auto.format == :auto
-        df_auto = read_dataframe(source_auto)
+        df_auto = read_dataframe(source_auto, "test.csv")
         @test nrow(df_auto) == 5
     end
     
-    @testset "FileSystemSource - Arrow" begin
+    @testset "FileSystemMedia - Arrow" begin
         arrow_path = joinpath(temp_dir, "test.arrow")
         Arrow.write(arrow_path, test_df)
-        
+
         # Test with explicit format
-        source = FileSystemSource(arrow_path, format=:arrow)
-        @test source.path == arrow_path
+        source = FileSystemMedia(temp_dir, format=:arrow)
+        @test source.path == temp_dir
         @test source.format == :arrow
-        
-        df = read_dataframe(source)
+
+        df = read_dataframe(source, "test.arrow")
         @test df isa DataFrame
         @test nrow(df) == 5
         @test ncol(df) == 4
         @test df.name == test_df.name
         @test df.age == test_df.age
-        
+
+        write_dataframe(source, "written.arrow", test_df)
+        df_written = read_dataframe(source, "written.arrow")
+        @test nrow(df_written) == 5
+
         # Test with auto format
-        source_auto = FileSystemSource(arrow_path)
-        df_auto = read_dataframe(source_auto)
+        source_auto = FileSystemMedia(temp_dir)
+        df_auto = read_dataframe(source_auto, "test.arrow")
         @test nrow(df_auto) == 5
     end
     
     # ==================================================================
-    # DatabaseSource Tests
+    # DatabaseMedia Tests
     # ==================================================================
     
-    @testset "DatabaseSource - Constructor" begin
+    @testset "DatabaseMedia - Constructor" begin
         db = SQLite.DB()  # In-memory database
-        
-        # Test with query only
-        source_query = DatabaseSource(db, query="SELECT * FROM users")
-        @test source_query.query == "SELECT * FROM users"
-        @test isnothing(source_query.params)
-        
-        # Test with query and params
-        source_params = DatabaseSource(db, query="SELECT * FROM users WHERE age > ?", params=[25])
-        @test source_params.query == "SELECT * FROM users WHERE age > ?"
-        @test source_params.params == [25]
-        
-        # Test with no query (table will be passed to read_dataframe)
-        source_no_query = DatabaseSource(db)
-        @test isnothing(source_no_query.query)
+
+        # path/url constructor
+        source_path = DatabaseMedia(":memory:", db_type=:sqlite)
+        @test source_path.db_type == :sqlite
+        @test source_path.locator == ":memory:"
+        @test source_path.connection isa SQLite.DB
+
+        # compatibility constructor with connection object
+        source_conn = DatabaseMedia(db)
+        @test source_conn.db_type == :sqlite
+        @test source_conn.connection === db
+
+        SQLite.close(source_path.connection)
+        SQLite.close(db)
+    end
+
+    @testset "DatabaseMedia - SQLite read/write with locator" begin
+        db_path = joinpath(temp_dir, "locator_source.db")
+        source = DatabaseMedia(db_path, db_type=:sqlite)
+
+        @test source.connection isa SQLite.DB
+
+        # write using table name
+        write_dataframe(source, "users", test_df)
+
+        # read by table
+        df_table = read_dataframe(source, table="users")
+        @test df_table isa DataFrame
+        @test nrow(df_table) == 5
+        @test df_table.name == test_df.name
+
+        # read by query
+        df_query = read_dataframe(source, query="SELECT * FROM users WHERE age >= 30 ORDER BY age")
+        @test nrow(df_query) == 3
+        @test all(df_query.age .>= 30)
+
+        # duplicate write should generate a new table name
+        write_dataframe(source, "users", test_df)
+        tables = SQLite.DBInterface.execute(source.connection, "SELECT name FROM sqlite_master WHERE type='table'") |> DataFrame
+        @test "users" in tables.name
+        @test "users_1" in tables.name
+
+        SQLite.close(source.connection)
     end
     
-    @testset "DatabaseSource - SQLite read with table" begin
+    @testset "DatabaseMedia - SQLite read with table" begin
         db = SQLite.DB()  # In-memory database
         
         # Create table and insert data
         SQLite.load!(test_df, db, "test_users")
         
         # Read using table parameter in read_dataframe
-        source = DatabaseSource(db)
+        source = DatabaseMedia(db)
         df = read_dataframe(source, table="test_users")
         
         @test df isa DataFrame
@@ -108,33 +147,33 @@ using SQLite
         @test df.age == test_df.age
     end
     
-    @testset "DatabaseSource - SQLite read with query" begin
+    @testset "DatabaseMedia - SQLite read with query" begin
         db = SQLite.DB()  # In-memory database
         
         # Create table and insert data
         SQLite.load!(test_df, db, "test_users")
         
-        # Read using query in DatabaseSource
-        source = DatabaseSource(db, query="SELECT * FROM test_users WHERE age > 28")
-        df = read_dataframe(source)
+        # Read using query in read_dataframe
+        source = DatabaseMedia(db)
+        df = read_dataframe(source, query="SELECT * FROM test_users WHERE age > 28")
         
         @test df isa DataFrame
         @test nrow(df) == 3  # Bob (30), Charlie (35), Eve (32)
         @test all(df.age .> 28)
         
         # Test with ORDER BY
-        source_ordered = DatabaseSource(db, query="SELECT * FROM test_users ORDER BY age DESC")
-        df_ordered = read_dataframe(source_ordered)
+        source_ordered = DatabaseMedia(db)
+        df_ordered = read_dataframe(source_ordered, query="SELECT * FROM test_users ORDER BY age DESC")
         @test df_ordered.age == sort(test_df.age, rev=true)
         
         # Test with explicit query parameter in read_dataframe
-        source_no_query = DatabaseSource(db)
+        source_no_query = DatabaseMedia(db)
         df_query_param = read_dataframe(source_no_query, query="SELECT * FROM test_users WHERE age < 30")
         @test nrow(df_query_param) == 2  # Alice (25), Diana (28)
         @test all(df_query_param.age .< 30)
     end
     
-    @testset "DatabaseSource - SQLite with multiple tables" begin
+    @testset "DatabaseMedia - SQLite with multiple tables" begin
         db = SQLite.DB()  # In-memory database
         
         # Create first table
@@ -149,13 +188,13 @@ using SQLite
         SQLite.load!(products_df, db, "products")
         
         # Read from first table
-        source_users = DatabaseSource(db)
+        source_users = DatabaseMedia(db)
         df_users = read_dataframe(source_users, table="users")
         @test nrow(df_users) == 5
         @test "name" in names(df_users)
         
         # Read from second table
-        source_products = DatabaseSource(db)
+        source_products = DatabaseMedia(db)
         df_products = read_dataframe(source_products, table="products")
         @test nrow(df_products) == 3
         @test "product_name" in names(df_products)
@@ -170,11 +209,17 @@ using SQLite
             JOIN users u ON pu.user_id = u.id 
             JOIN products p ON pu.product_id = p.product_id
         """
-        source_join = DatabaseSource(db, query=join_query)
-        df_join = read_dataframe(source_join)
+        source_join = DatabaseMedia(db)
+        df_join = read_dataframe(source_join, query=join_query)
         @test nrow(df_join) == 3
         @test "name" in names(df_join)
         @test "product_name" in names(df_join)
+
+        # write with duplicate table name generates a new name
+        write_source = DatabaseMedia(db)
+        write_dataframe(write_source, "users", test_df)
+        tables = SQLite.DBInterface.execute(db, "SELECT name FROM sqlite_master WHERE type='table'") |> DataFrame
+        @test "users_1" in tables.name
     end
     
     # ==================================================================
@@ -182,30 +227,41 @@ using SQLite
     # ==================================================================
     
     @testset "Media - Generic processing function" begin
-        # Function that works with any iMediaSource
-        function count_adults(source::iMediaSource; table=nothing)
-            if isnothing(table)
-                df = read_dataframe(source)
+        # Function that works with any iSourceMedia
+        function count_adults(source::iSourceMedia; filename=nothing, table=nothing, query=nothing)
+            if source isa FileSystemMedia
+                if isnothing(filename)
+                    error("filename is required for FileSystemMedia")
+                end
+                df = read_dataframe(source, filename)
+            elseif source isa DatabaseMedia
+                if !isnothing(query)
+                    df = read_dataframe(source, query=query)
+                elseif !isnothing(table)
+                    df = read_dataframe(source, table=table)
+                else
+                    error("table or query is required for DatabaseMedia")
+                end
             else
-                df = read_dataframe(source, table=table)
+                df = read_dataframe(source)
             end
             return count(row -> row.age >= 30, eachrow(df))
         end
         
         # Test with CSV
         csv_path = joinpath(temp_dir, "test.csv")
-        csv_source = FileSystemSource(csv_path)
-        @test count_adults(csv_source) == 3  # Bob, Charlie, Eve
+        csv_source = FileSystemMedia(temp_dir)
+        @test count_adults(csv_source, filename="test.csv") == 3  # Bob, Charlie, Eve
         
         # Test with Arrow
         arrow_path = joinpath(temp_dir, "test.arrow")
-        arrow_source = FileSystemSource(arrow_path)
-        @test count_adults(arrow_source) == 3
+        arrow_source = FileSystemMedia(temp_dir)
+        @test count_adults(arrow_source, filename="test.arrow") == 3
         
         # Test with Database
         db = SQLite.DB()
         SQLite.load!(test_df, db, "users")
-        db_source = DatabaseSource(db)
+        db_source = DatabaseMedia(db)
         @test count_adults(db_source, table="users") == 3
     end
     

@@ -19,8 +19,8 @@ println("-" ^ 50)
 sample_csv_path = joinpath(@__DIR__, "sample_data.csv")
 println("Reading from: $sample_csv_path")
 
-# Read using FileSystemSource
-csv_source = FileSystemSource(sample_csv_path, format=:csv)
+# Read using FileSystemMedia
+csv_source = FileSystemMedia(sample_csv_path, format=:csv)
 df_csv = read_dataframe(csv_source)
 println("\nData read from CSV (first 5 rows):")
 println(first(df_csv, 5))
@@ -36,8 +36,8 @@ println("-" ^ 50)
 sample_arrow_path = joinpath(@__DIR__, "sample_data.arrow")
 println("Reading from: $sample_arrow_path")
 
-# Read using FileSystemSource with auto-detection
-arrow_source = FileSystemSource(sample_arrow_path)  # format=:auto by default
+# Read using FileSystemMedia with auto-detection
+arrow_source = FileSystemMedia(sample_arrow_path)  # format=:auto by default
 df_arrow = read_dataframe(arrow_source)
 println("\nData read from Arrow (first 5 rows):")
 println(first(df_arrow, 5))
@@ -50,7 +50,7 @@ println("\nExample 3: Reading with explicit format")
 println("-" ^ 50)
 
 # You can explicitly specify the format even if the extension suggests otherwise
-csv_source_explicit = FileSystemSource(sample_csv_path, format=:csv)
+csv_source_explicit = FileSystemMedia(sample_csv_path, format=:csv)
 df_explicit = read_dataframe(csv_source_explicit)
 println("Data read with explicit format specification:")
 println(first(df_explicit, 3))
@@ -68,25 +68,25 @@ println("Connecting to: $sample_db_path")
 
 db = SQLite.DB(sample_db_path)
 
-# Read entire table using DatabaseSource with table parameter in read_dataframe
+# Read entire table using DatabaseMedia with table parameter in read_dataframe
 println("\nReading entire 'users' table:")
-table_source = DatabaseSource(db)
+table_source = DatabaseMedia(db)
 df_table = read_dataframe(table_source, table="users")
 println(first(df_table, 5))
 
-# Read with custom query using DatabaseSource
-println("\nQuerying users with age > 30 (query in DatabaseSource):")
-query_source = DatabaseSource(db, query="SELECT * FROM users WHERE age > 30")
-df_query = read_dataframe(query_source)
+# Read with custom query using DatabaseMedia
+println("\nQuerying users with age > 30 (query in DatabaseMedia):")
+query_source = DatabaseMedia(db)
+df_query = read_dataframe(query_source, query="SELECT * FROM users WHERE age > 30")
 println(df_query)
 
 # Read with query passed directly to read_dataframe
 println("\nQuerying users with age <= 30 (query as parameter):")
-plain_source = DatabaseSource(db)
+plain_source = DatabaseMedia(db)
 df_query_param = read_dataframe(plain_source, query="SELECT * FROM users WHERE age <= 30")
 println(df_query_param)
 
-println("\nNote: You can pass 'table', 'query' to read_dataframe() or set 'query' in DatabaseSource!")
+println("\nNote: You can pass 'table', 'query' to read_dataframe() or set 'query' in DatabaseMedia!")
 println()
 
 # ====================================================================
@@ -99,8 +99,8 @@ println("-" ^ 50)
 dump_path = joinpath(@__DIR__, "sample_dump.sql")
 println("Reading from: $dump_path")
 
-# Create SQLDumpSource
-dump_source = SQLDumpSource(dump_path, db_type=:mysql)
+# Create SQLDumpMedia
+dump_source = SQLDumpMedia(dump_path, db_type=:mysql)
 
 # List all tables in the dump
 println("\nListing tables in dump:")
@@ -125,7 +125,7 @@ println()
 println("\nExample 6: Generic data pipeline")
 println("-" ^ 50)
 
-function process_data(source::iMediaSource; table=nothing, query=nothing)
+function process_data(source::iSourceMedia; table=nothing, query=nothing)
     # Read data from any source using read_dataframe
     df = if !isnothing(table)
         read_dataframe(source, table=table)
@@ -152,7 +152,7 @@ result_arrow = process_data(arrow_source)
 println(result_arrow)
 
 # Also works with database
-db_source = DatabaseSource(db)
+db_source = DatabaseMedia(db)
 println("\nProcessing database source:")
 result_db = process_data(db_source, table="users")
 println(result_db)

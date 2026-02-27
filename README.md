@@ -26,47 +26,47 @@ df = read_dataframe("data.csv.gz")
 
 ### Media Interface
 
-Use the Media interface for a unified API across different data sources:
+Use the Media interface for a unified read/write abstraction across different media backends:
 
 ```julia
 using MyJuliaToolbox.IO
 
-# Read from file
-csv_source = FileSystemSource("data.csv")
-df = read_dataframe(csv_source)
+# Read from file in a folder
+csv_source = FileSystemMedia("data")
+df = read_dataframe(csv_source, "data.csv")
 
 # Read from database
 using SQLite
 db = SQLite.DB("mydata.db")
-db_source = DatabaseSource(db, table="users")
-df = read_dataframe(db_source)
+db_source = DatabaseMedia(db)
+df = read_dataframe(db_source, table="users")
 
 # Custom SQL query
-query_source = DatabaseSource(db, query="SELECT * FROM users WHERE age > 30")
-df = read_dataframe(query_source)
+query_source = DatabaseMedia(db)
+df = read_dataframe(query_source, query="SELECT * FROM users WHERE age > 30")
 ```
 
 ### Async logging
 
-Use the non-blocking logger with any `iMediaSource` sink.
+Use the non-blocking logger with any `iSourceMedia` sink.
 
 ```julia
 using MyJuliaToolbox
 
 # Console sink
-console_logger = AsyncLogger(ConsoleSource(); min_level=:info, capacity=1024)
+console_logger = AsyncLogger(ConsoleMedia(); min_level=:info, capacity=1024)
 log_info!(console_logger, "job started", metadata=(job_id=42,))
 log_warn!(console_logger, "slow step detected")
 stop_logger!(console_logger)
 
 # File sink
-file_logger = AsyncLogger(FileSystemSource("logs/app.log"); min_level=:debug)
+file_logger = AsyncLogger(FileSystemMedia("logs/app.log"); min_level=:debug)
 log_debug!(file_logger, "debug details")
 log_error!(file_logger, "step failed", metadata=(step="load",))
 stop_logger!(file_logger)
 ```
 
-For SQLite logging, pass a `DatabaseSource(db)` and optional `table="logs"` to `AsyncLogger`.
+For SQLite logging, pass a `DatabaseMedia(db)` and optional `table="logs"` to `AsyncLogger`.
 Table names must match `[A-Za-z_][A-Za-z0-9_]*` (letters/digits/underscore, not starting with a digit).
 
 ### Writing files

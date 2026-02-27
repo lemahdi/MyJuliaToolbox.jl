@@ -170,7 +170,7 @@ using MyJuliaToolbox.IO
                 """)
             end
 
-            source = FileSystemSource(temp_dir)
+            source = FileSystemMedia(temp_dir)
             params = read_parameters(ModelParameters, source, "model.json", "configs")
 
             @test params.name == "fs-model"

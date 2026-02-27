@@ -26,33 +26,35 @@ df = read_dataframe("data.csv.gz")
 
 ### Media Interface
 
-The Media interface provides an abstraction layer for reading data from different sources (files, databases) using a unified API:
+The Media interface provides an abstraction layer for reading and writing across different media backends (files, databases, streams) using a unified API:
 
 ```julia
 using MyJuliaToolbox.IO
 
-# Read from CSV file
-csv_source = FileSystemSource("data.csv")
-df = read_dataframe(csv_source)
+# Read from CSV file in a folder
+csv_source = FileSystemMedia("data")
+df = read_dataframe(csv_source, "data.csv")
 
-# Read from Arrow file
-arrow_source = FileSystemSource("data.arrow", format=:arrow)
-df = read_dataframe(arrow_source)
+# Read from Arrow file in a folder
+arrow_source = FileSystemMedia("data", format=:arrow)
+df = read_dataframe(arrow_source, "data.arrow")
 
 # Read from database table
 using SQLite
 db = SQLite.DB("mydata.db")
-db_source = DatabaseSource(db, table="users")
-df = read_dataframe(db_source)
+db_source = DatabaseMedia(db)
+df = read_dataframe(db_source, table="users")
 
 # Read with custom SQL query
-query_source = DatabaseSource(db, query="SELECT * FROM users WHERE age > 30")
-df = read_dataframe(query_source)
+query_source = DatabaseMedia(db)
+df = read_dataframe(query_source, query="SELECT * FROM users WHERE age > 30")
 ```
 
 The Media interface supports:
-- **FileSystemSource**: Read CSV, Arrow, and other file formats
-- **DatabaseSource**: Read from databases (SQLite auto-detected, extensible to PostgreSQL, MySQL, etc.)
+- **FileSystemMedia**: File-system backend for read and write workflows
+- **DatabaseMedia**: Database backend for read/query workflows and sink-style writes
+- **ConsoleMedia**: Stream backend for write-oriented workflows (e.g. logging)
+- **SQLDumpMedia**: Read-only SQL dump backend for table/query extraction
 
 ### Writing files
 

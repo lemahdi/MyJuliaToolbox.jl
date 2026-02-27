@@ -1,92 +1,147 @@
-# Additional read_dataframe methods for iMediaSource types
-# This file extends the read_dataframe function to work with iMediaSource objects
+# Additional read_dataframe methods for iSourceMedia types
+# This file extends the read_dataframe function to work with iSourceMedia objects
 
 using SQLite
 
 """
-    read_dataframe(source::FileSystemSource; kwargs...) -> DataFrame
+    read_dataframe(source::FileSystemMedia; kwargs...) -> DataFrame
 
-Read a DataFrame from a FileSystemSource.
+Read a DataFrame from a FileSystemMedia.
 
 # Arguments
-- `source::FileSystemSource`: The file system source to read from
+- `source::FileSystemMedia`: The file system source to read from
 - `kwargs...`: Additional keyword arguments passed to the underlying reader
 """
-function read_dataframe(source::FileSystemSource; kwargs...)
-    # Use the path-based read_dataframe function with the format from the source
-    return read_dataframe(source.path; format=source.format, kwargs...)
+function read_dataframe(source::FileSystemMedia; kwargs...)
+    kwargs_dict = Dict(kwargs)
+    filename = get(kwargs_dict, :filename, nothing)
+    passthrough_kwargs = (; (k => v for (k, v) in kwargs if k != :filename)...)
+    if isnothing(filename)
+        return read_dataframe(source.path; format=source.format, passthrough_kwargs...)
+    end
+    full_path = joinpath(source.path, filename)
+    return read_dataframe(full_path; format=source.format, passthrough_kwargs...)
+end
+
+function read_dataframe(source::FileSystemMedia, filename::AbstractString; kwargs...)
+    full_path = joinpath(source.path, filename)
+    return read_dataframe(full_path; format=source.format, kwargs...)
 end
 
 """
-    read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
+    read_dataframe(source::DatabaseMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
 
-Read a DataFrame from a DatabaseSource.
+Read a DataFrame from a DatabaseMedia.
 
 # Arguments
-- `source::DatabaseSource`: The database source to read from  
+- `source::DatabaseMedia`: The database source to read from  
 - `table::Union{String,Nothing}`: Table name to read from
 - `query::Union{String,Nothing}`: SQL query to execute
 - `kwargs...`: Additional keyword arguments (currently unused)
 
 # Note
-Provide one of: `table` parameter, `query` parameter, or set `query` in DatabaseSource.
+Provide one of: `table` parameter, `query` parameter, or set `query` in DatabaseMedia.
 """
-function read_dataframe(source::DatabaseSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
-    # Count how many query sources are provided
-    num_sources = (isnothing(table) ? 0 : 1) +
-                  (isnothing(query) ? 0 : 1) +
-                  (isnothing(source.query) ? 0 : 1)
-    
-    if num_sources == 0
-        error("Must provide either 'table' parameter, 'query' parameter, or 'query' in DatabaseSource")
+function read_dataframe(source::DatabaseMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
+    if isnothing(table) && isnothing(query)
+        error("For DatabaseMedia, provide either query=<sql> or table=<table_name>")
     end
-    if num_sources > 1
-        error("Cannot provide multiple query sources. Choose one of: 'table' parameter, 'query' parameter, or 'query' in DatabaseSource")
+    if !isnothing(table) && !isnothing(query)
+        error("Provide only one of query or table for DatabaseMedia reads")
     end
-    
-    sql_query = if !isnothing(table)
-        "SELECT * FROM $(table)"
-    elseif !isnothing(query)
-        query
-    else
-        source.query
-    end
-    
-    # Try to detect the database type and use appropriate method
-    # Check if it's SQLite
-    if source.connection isa SQLite.DB
-        # SQLite implementation
-        return SQLite.DBInterface.execute(source.connection, sql_query, source.params === nothing ? [] : source.params) |> DataFrame
-    else
-        # Generic template for other databases
-        error("""
-    Database reading not implemented for connection type: $(typeof(source.connection))
-    
-    Please use read_dataframe with appropriate database-specific code.
-    Common implementations:
-    
-    For SQLite:
-        using SQLite
-        SQLite.DBInterface.execute(source.connection, query) |> DataFrame
-    
-    For PostgreSQL:
-        using LibPQ
-        DataFrame(execute(source.connection, query))
-    
-    For MySQL:
-        using MySQL, DBInterface
-        DBInterface.execute(source.connection, query) |> DataFrame
-    """)
+
+    sql_query = isnothing(query) ? "SELECT * FROM $(table)" : query
+
+    return _with_database_connection(source) do conn
+        if source.db_type == :sqlite && conn isa SQLite.DB
+            return SQLite.DBInterface.execute(conn, sql_query) |> DataFrame
+        end
+        error("Database reading not implemented for db_type=$(source.db_type), connection=$(typeof(conn))")
     end
 end
 
-"""
-    read_dataframe(source::SQLDumpSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
+function read_dataframe(source::DatabaseMedia, query::AbstractString; kwargs...)
+    return read_dataframe(source; query=String(query), kwargs...)
+end
 
-Read a DataFrame from a SQLDumpSource by loading the SQL dump into SQLite and querying it.
+function _validated_table_identifier(identifier::String; field::String="identifier")
+    if match(r"^[A-Za-z_][A-Za-z0-9_]*$", identifier) === nothing
+        throw(ArgumentError("Invalid $field '$identifier'. Use only letters, digits, and underscore."))
+    end
+    return identifier
+end
+
+function _sqlite_table_exists(conn::SQLite.DB, table_name::String)
+    result = SQLite.DBInterface.execute(
+        conn,
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1",
+        (table_name,),
+    ) |> DataFrame
+    return nrow(result) > 0
+end
+
+function _next_available_table_name(conn::SQLite.DB, base_name::String)
+    candidate = base_name
+    suffix = 1
+    while _sqlite_table_exists(conn, candidate)
+        candidate = "$(base_name)_$(suffix)"
+        suffix += 1
+    end
+    return candidate
+end
+
+function write_dataframe(source::FileSystemMedia, filename::AbstractString, df::DataFrame; format::Symbol=source.format, overwrite::Bool=false, atomic::Bool=true, kwargs...)
+    mkpath(source.path)
+    full_path = joinpath(source.path, filename)
+    write_dataframe(full_path, df; format=format, overwrite=overwrite, atomic=atomic, kwargs...)
+    return nothing
+end
+
+function write_dataframe(source::FileSystemMedia, df::DataFrame; format::Symbol=source.format, overwrite::Bool=false, atomic::Bool=true, kwargs...)
+    kwargs_dict = Dict(kwargs)
+    filename = get(kwargs_dict, :filename, nothing)
+    passthrough_kwargs = (; (k => v for (k, v) in kwargs if k != :filename)...)
+    if isnothing(filename)
+        write_dataframe(source.path, df; format=format, overwrite=overwrite, atomic=atomic, passthrough_kwargs...)
+    else
+        write_dataframe(source, filename, df; format=format, overwrite=overwrite, atomic=atomic, passthrough_kwargs...)
+    end
+    return nothing
+end
+
+function write_dataframe(source::DatabaseMedia, table::AbstractString, df::DataFrame; kwargs...)
+    table_name = _validated_table_identifier(String(table); field="table name")
+
+    return _with_database_connection(source) do conn
+        if source.db_type == :sqlite && conn isa SQLite.DB
+            final_table = table_name
+            if _sqlite_table_exists(conn, final_table)
+                final_table = _next_available_table_name(conn, table_name)
+                @warn "Table '$table_name' already exists. Writing to '$final_table' instead."
+            end
+
+            SQLite.load!(df, conn, final_table)
+            return nothing
+        end
+        error("Database writing not implemented for db_type=$(source.db_type), connection=$(typeof(conn))")
+    end
+end
+
+function write_dataframe(source::DatabaseMedia, df::DataFrame; kwargs...)
+    table = get(Dict(kwargs), :table, nothing)
+    if isnothing(table)
+        error("For DatabaseMedia writes, provide table=<table_name> or use write_dataframe(source, table, df)")
+    end
+    return write_dataframe(source, String(table), df; kwargs...)
+end
+
+"""
+    read_dataframe(source::SQLDumpMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
+
+Read a DataFrame from a SQLDumpMedia by loading the SQL dump into SQLite and querying it.
 
 # Arguments
-- `source::SQLDumpSource`: The SQL dump source to read from
+- `source::SQLDumpMedia`: The SQL dump source to read from
 - `table::Union{String,Nothing}`: Table name to read from (optional)
 - `query::Union{String,Nothing}`: SQL query to execute (optional)
 - `kwargs...`: Additional keyword arguments (currently unused)
@@ -99,7 +154,7 @@ Read a DataFrame from a SQLDumpSource by loading the SQL dump into SQLite and qu
 - The SQL dump is loaded into a SQLite database with automatic syntax conversion
 - For MySQL dumps, converts AUTO_INCREMENT, KEY definitions, and data types
 """
-function read_dataframe(source::SQLDumpSource; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
+function read_dataframe(source::SQLDumpMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
     if !isnothing(table) && !isnothing(query)
         error("Cannot provide both 'table' and 'query'. Choose one.")
     end
@@ -327,9 +382,9 @@ end
 
 """
 # Arguments
-- `source::iMediaSource`: Any media source type
+- `source::iSourceMedia`: Any media source type
 - `kwargs...`: Additional keyword arguments
 """
-function read_dataframe(source::iMediaSource; kwargs...)
-    error("read_dataframe not implemented for iMediaSource type: $(typeof(source))")
+function read_dataframe(source::iSourceMedia; kwargs...)
+    error("read_dataframe not implemented for iSourceMedia type: $(typeof(source))")
 end
