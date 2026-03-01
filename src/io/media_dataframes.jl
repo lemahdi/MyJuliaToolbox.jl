@@ -40,7 +40,7 @@ Read a DataFrame from a DatabaseMedia.
 - `kwargs...`: Additional keyword arguments (currently unused)
 
 # Note
-Provide one of: `table` parameter, `query` parameter, or set `query` in DatabaseMedia.
+Provide one of: `table` parameter or `query` parameter.
 """
 function read_dataframe(source::DatabaseMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
     if isnothing(table) && isnothing(query)
@@ -50,7 +50,12 @@ function read_dataframe(source::DatabaseMedia; table::Union{String,Nothing}=noth
         error("Provide only one of query or table for DatabaseMedia reads")
     end
 
-    sql_query = isnothing(query) ? "SELECT * FROM $(table)" : query
+    sql_query = if isnothing(query)
+        safe_table = _validated_table_identifier(String(table); field="table name")
+        "SELECT * FROM $safe_table"
+    else
+        query
+    end
 
     return _with_database_connection(source) do conn
         if source.db_type == :sqlite && conn isa SQLite.DB
@@ -135,6 +140,27 @@ function write_dataframe(source::DatabaseMedia, df::DataFrame; kwargs...)
     return write_dataframe(source, String(table), df; kwargs...)
 end
 
+function write_dataframe(source::ConsoleMedia, df::DataFrame; format::Symbol=:csv, kwargs...)
+    write_dataframe(source.stream, df; format=format, kwargs...)
+    return nothing
+end
+
+function write_dataframe(source::SQLDumpMedia, df::DataFrame; kwargs...)
+    throw(ArgumentError("SQLDumpMedia is read-only and cannot be used as a write_dataframe sink"))
+end
+
+function write_dataframe(source::SQLDumpMedia, target::AbstractString, df::DataFrame; kwargs...)
+    throw(ArgumentError("SQLDumpMedia is read-only and cannot be used as a write_dataframe sink"))
+end
+
+function write_dataframe(source::iSourceMedia, df::DataFrame; kwargs...)
+    error("write_dataframe not implemented for iSourceMedia type: $(typeof(source))")
+end
+
+function write_dataframe(source::iSourceMedia, target::AbstractString, df::DataFrame; kwargs...)
+    error("write_dataframe not implemented for iSourceMedia type: $(typeof(source))")
+end
+
 """
     read_dataframe(source::SQLDumpMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...) -> DataFrame
 
@@ -174,7 +200,8 @@ function read_dataframe(source::SQLDumpMedia; table::Union{String,Nothing}=nothi
 
         # Build the query
         sql_query = if !isnothing(table)
-            "SELECT * FROM $(table)"
+                safe_table = _validated_table_identifier(String(table); field="table name")
+                "SELECT * FROM $safe_table"
         else
             query
         end

@@ -51,7 +51,6 @@ function read_dataframe(tbl; format::Symbol = :auto, kwargs...)
         # Extract SQL-specific parameters
         table = get(Dict(kwargs), :table, nothing)
         query = get(Dict(kwargs), :query, nothing)
-        params = get(Dict(kwargs), :params, nothing)
         
         # Create a DatabaseMedia without query (will be passed to read_dataframe)
         source = DatabaseMedia(tbl)
@@ -118,7 +117,6 @@ function read_dataframe(io::Base.IO; format::Symbol = :auto, kwargs...)
         # Extract SQL-specific parameters
         table = get(Dict(kwargs), :table, nothing)
         query = get(Dict(kwargs), :query, nothing)
-        params = get(Dict(kwargs), :params, nothing)
         
         # Create a DatabaseMedia without query (will be passed to read_dataframe)
         source = DatabaseMedia(io)
