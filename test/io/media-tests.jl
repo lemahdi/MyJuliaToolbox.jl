@@ -223,6 +223,31 @@ using SQLite
         tables = SQLite.DBInterface.execute(db, "SELECT name FROM sqlite_master WHERE type='table'") |> DataFrame
         @test "users_1" in tables.name
     end
+
+    @testset "Other iSourceMedia write behavior" begin
+        # ConsoleMedia writes DataFrame content to stream as CSV by default
+        buffer = IOBuffer()
+        console_source = ConsoleMedia(stream=buffer)
+        write_dataframe(console_source, test_df)
+        output = String(take!(buffer))
+        @test occursin("id,name,age,score", output)
+        @test occursin("Alice", output)
+
+        # SQLDumpMedia is read-only and must reject writes
+        dump_path = joinpath(temp_dir, "readonly_dump.sql")
+        open(dump_path, "w") do io
+            write(io, "CREATE TABLE t (id int(11));")
+        end
+        dump_source = SQLDumpMedia(dump_path, db_type=:mysql)
+        @test_throws ArgumentError write_dataframe(dump_source, test_df)
+        @test_throws ArgumentError write_dataframe(dump_source, "t", test_df)
+
+        # Generic fallback for unknown media subtype
+        struct DummyMedia <: iSourceMedia end
+        dummy = DummyMedia()
+        @test_throws ErrorException write_dataframe(dummy, test_df)
+        @test_throws ErrorException write_dataframe(dummy, "target", test_df)
+    end
     
     # ==================================================================
     # Integration Tests

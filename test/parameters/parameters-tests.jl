@@ -223,4 +223,60 @@ using SQLite
             end
         end
     end
+
+    @testset "write_parameters to path and media" begin
+        temp_dir = mktempdir()
+        params_root = nothing
+        try
+            params = ModelParameters(
+                "writer",
+                21,
+                true,
+                OptimizerParameters(0.015, 0.88),
+                ["save", "json"],
+            )
+
+            # plain path write + roundtrip read
+            path_out = joinpath(temp_dir, "plain.json")
+            write_parameters(path_out, params)
+            loaded = parameters_from_json(ModelParameters, path_out)
+            @test loaded.name == "writer"
+            @test loaded.optimizer.beta1 == 0.88
+            @test loaded.tags == ["save", "json"]
+
+            # overwrite protection
+            @test_throws ArgumentError write_parameters(path_out, params)
+            write_parameters(path_out, params; overwrite=true, pretty=false)
+
+            # FileSystemMedia write + read_parameters roundtrip
+            source_fs = FileSystemMedia(temp_dir)
+            write_parameters(source_fs, "fs.json", params, "cfg")
+            loaded_fs = read_parameters(ModelParameters, source_fs, "fs.json", "cfg")
+            @test loaded_fs.epochs == 21
+
+            # DatabaseMedia with parameters_locator write + read_parameters roundtrip
+            params_root = mktempdir()
+            source_db = DatabaseMedia(":memory:", parameters_locator=params_root)
+            try
+                write_parameters(source_db, "db.json", params, "nested")
+                loaded_db = read_parameters(ModelParameters, source_db, "db.json", "nested")
+                @test loaded_db.optimizer.learning_rate == 0.015
+            finally
+                SQLite.close(source_db.connection)
+            end
+
+            # media-specific validation
+            source_db_no_locator = DatabaseMedia(":memory:")
+            try
+                @test_throws ArgumentError write_parameters(source_db_no_locator, "db.json", params)
+            finally
+                SQLite.close(source_db_no_locator.connection)
+            end
+        finally
+            rm(temp_dir; recursive=true, force=true)
+            if params_root !== nothing
+                rm(params_root; recursive=true, force=true)
+            end
+        end
+    end
 end
