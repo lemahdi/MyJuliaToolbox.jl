@@ -17,6 +17,7 @@ const _LOG_LEVEL_ANSI_COLOR = Dict(
     :error => "\e[31m", # red
 )
 
+const _LOG_TIMESTAMP_ANSI_COLOR = "\e[32m" # green
 const _ANSI_RESET = "\e[0m"
 
 """
@@ -161,7 +162,8 @@ function _should_log(min_level::Symbol, level::Symbol)
 end
 
 function _format_record(record::LogRecord; color::Bool=false)
-    ts = Dates.format(record.timestamp, dateformat"yyyy-mm-ddTHH:MM:SS.s")
+    ts_text = "[" * Dates.format(record.timestamp, dateformat"yyyy-mm-ddTHH:MM:SS.s") * "]"
+    ts = color ? string(_LOG_TIMESTAMP_ANSI_COLOR, ts_text, _ANSI_RESET) : ts_text
     level_text = "[" * uppercase(String(record.level)) * "]"
     level = if color
         color_code = get(_LOG_LEVEL_ANSI_COLOR, record.level, "")
@@ -170,7 +172,7 @@ function _format_record(record::LogRecord; color::Bool=false)
         level_text
     end
     meta = isnothing(record.metadata) ? "" : " | metadata=$(record.metadata)"
-    return "[$ts] $level $(record.message)$(meta)"
+    return "$ts $level $(record.message)$(meta)"
 end
 
 function _metadata_to_string(metadata)
