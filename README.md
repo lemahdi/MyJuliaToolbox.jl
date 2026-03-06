@@ -73,6 +73,7 @@ stop_logger!(file_logger)
 
 For SQLite logging, pass a `DatabaseMedia(db)` and optional `table="logs"` to `AsyncLogger`.
 Table names must match `[A-Za-z_][A-Za-z0-9_]*` (letters/digits/underscore, not starting with a digit).
+Console logs are colorized by level (`debug/info/warn/error`) by default; disable with `AsyncLogger(ConsoleMedia(); color=false)`.
 
 ### Writing files
 

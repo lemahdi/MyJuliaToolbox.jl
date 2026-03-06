@@ -18,6 +18,7 @@ using Dates
         output = String(take!(buffer))
         @test occursin("console message", output)
         @test occursin("[INFO]", output)
+        @test occursin("\e[", output)
     end
 
     @testset "FileSystemMedia sink" begin

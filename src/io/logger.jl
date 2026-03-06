@@ -10,6 +10,15 @@ const _LOG_LEVEL_PRIORITY = Dict(
     :error => 40,
 )
 
+const _LOG_LEVEL_ANSI_COLOR = Dict(
+    :debug => "\e[90m", # bright black / gray
+    :info => "\e[36m",  # cyan
+    :warn => "\e[33m",  # yellow
+    :error => "\e[31m", # red
+)
+
+const _ANSI_RESET = "\e[0m"
+
 """
     LogRecord
 
@@ -151,11 +160,17 @@ function _should_log(min_level::Symbol, level::Symbol)
     return level_priority >= min_priority
 end
 
-function _format_record(record::LogRecord)
+function _format_record(record::LogRecord; color::Bool=false)
     ts = Dates.format(record.timestamp, dateformat"yyyy-mm-ddTHH:MM:SS.s")
-    level = uppercase(String(record.level))
+    level_text = "[" * uppercase(String(record.level)) * "]"
+    level = if color
+        color_code = get(_LOG_LEVEL_ANSI_COLOR, record.level, "")
+        isempty(color_code) ? level_text : string(color_code, level_text, _ANSI_RESET)
+    else
+        level_text
+    end
     meta = isnothing(record.metadata) ? "" : " | metadata=$(record.metadata)"
-    return "[$ts] [$level] $(record.message)$(meta)"
+    return "[$ts] $level $(record.message)$(meta)"
 end
 
 function _metadata_to_string(metadata)
@@ -182,7 +197,8 @@ function write_log_record(source::FileSystemMedia, record::LogRecord; kwargs...)
 end
 
 function write_log_record(source::ConsoleMedia, record::LogRecord; kwargs...)
-    println(source.stream, _format_record(record))
+    color = get(kwargs, :color, true)
+    println(source.stream, _format_record(record; color=color))
     flush(source.stream)
     return nothing
 end
