@@ -4,6 +4,9 @@
 using DataFrames
 using JSON
 
+const _DATASET_PARAMETER_REF_KIND = "mjt_iParameters_ref"
+const _DATASET_PARAMETERS_DIR = "parameters"
+
 export iDataSet, LoadedDataSet, write_dataset, read_dataset
 
 """
@@ -68,13 +71,14 @@ function _write_dataset_impl(source::IO.FileSystemMedia, dataset::iDataSet; type
     mkpath(source.path)
 
     payload = Dict{String,Any}()
+    parameter_counter = Ref(0)
     for field_name in fieldnames(typeof(dataset))
         value = getfield(dataset, field_name)
         if value isa DataFrame
             file_name = "$(field_name).$(ext)"
             IO.write_dataframe(source, file_name, value; format=type, overwrite=overwrite, atomic=atomic)
         else
-            payload[string(field_name)] = _dataset_to_json_value(value)
+            payload[string(field_name)] = _dataset_to_json_value(value, source, parameter_counter; overwrite=overwrite, pretty=pretty)
         end
     end
 
@@ -139,7 +143,7 @@ end
 
 function read_dataset(::Type{T}, source::IO.iSourceMedia; type::Symbol=:arrow) where {T <: iDataSet}
     loaded = read_dataset(source; type=type)
-    return _dataset_from_attributes(T, loaded.attributes)
+    return _dataset_from_attributes(T, loaded.attributes, source)
 end
 
 function _read_dataset_impl(source::IO.FileSystemMedia; type::Symbol=:arrow)
@@ -166,7 +170,7 @@ function _read_dataset_impl(source::IO.FileSystemMedia; type::Symbol=:arrow)
     if isfile(json_path)
         json_data = JSON.parsefile(json_path)
         for (k, v) in json_data
-            attributes[Symbol(k)] = v
+            attributes[Symbol(k)] = _dataset_decode_json_value(v, source)
         end
     end
 
@@ -178,7 +182,9 @@ function _read_dataset_impl(source::IO.iSourceMedia; type::Symbol=:arrow)
 end
 
 function _dataset_to_json_value(value)
-    if value isa AbstractVector
+    if value === nothing
+        return nothing
+    elseif value isa AbstractVector
         return [_dataset_to_json_value(v) for v in value]
     elseif value isa AbstractDict
         converted = Dict{String,Any}()
@@ -199,7 +205,113 @@ function _dataset_to_json_value(value)
     end
 end
 
-function _dataset_from_attributes(::Type{T}, attributes::Dict{Symbol,Any}) where {T <: iDataSet}
+function _dataset_to_json_value(value, source::IO.FileSystemMedia, parameter_counter::Base.RefValue{Int}; overwrite::Bool=false, pretty::Bool=true)
+    if value === nothing
+        return nothing
+    elseif value isa iParameters
+        parameter_counter[] += 1
+        file_name = "params_$(parameter_counter[]).json"
+        write_parameters(source, file_name, value, _DATASET_PARAMETERS_DIR; overwrite=overwrite, pretty=pretty)
+        return Dict(
+            "__kind__" => _DATASET_PARAMETER_REF_KIND,
+            "type" => string(typeof(value)),
+            "file" => file_name,
+            "relative_path" => _DATASET_PARAMETERS_DIR,
+        )
+    elseif value isa AbstractVector
+        return [_dataset_to_json_value(v, source, parameter_counter; overwrite=overwrite, pretty=pretty) for v in value]
+    elseif value isa AbstractDict
+        converted = Dict{String,Any}()
+        for (k, v) in value
+            converted[string(k)] = _dataset_to_json_value(v, source, parameter_counter; overwrite=overwrite, pretty=pretty)
+        end
+        return converted
+    elseif isstructtype(typeof(value)) && !(value isa Number) && !(value isa AbstractString) && !(value isa Symbol)
+        converted = Dict{String,Any}()
+        for field_name in fieldnames(typeof(value))
+            converted[string(field_name)] = _dataset_to_json_value(getfield(value, field_name), source, parameter_counter; overwrite=overwrite, pretty=pretty)
+        end
+        return converted
+    elseif value isa Symbol
+        return string(value)
+    else
+        return value
+    end
+end
+
+function _dataset_decode_json_value(value, source::IO.iSourceMedia)
+    if _is_dataset_parameter_reference(value)
+        target_type = _dataset_parameter_target_type(iParameters, value)
+        return read_parameters(target_type, source, _dataset_parameter_file(value), _dataset_parameter_relative_path(value))
+    elseif value isa AbstractVector
+        return [_dataset_decode_json_value(v, source) for v in value]
+    elseif value isa AbstractDict
+        decoded = Dict{String,Any}()
+        for (k, v) in value
+            decoded[string(k)] = _dataset_decode_json_value(v, source)
+        end
+        return decoded
+    else
+        return value
+    end
+end
+
+function _is_dataset_parameter_reference(value)
+    value isa AbstractDict || return false
+    return haskey(value, "__kind__") && string(value["__kind__"]) == _DATASET_PARAMETER_REF_KIND && haskey(value, "file")
+end
+
+function _dataset_parameter_file(ref::AbstractDict)
+    return string(ref["file"])
+end
+
+function _dataset_parameter_relative_path(ref::AbstractDict)
+    return haskey(ref, "relative_path") ? string(ref["relative_path"]) : _DATASET_PARAMETERS_DIR
+end
+
+function _dataset_parameter_target_type(::Type{ExpectedT}, ref::AbstractDict) where {ExpectedT}
+    if Base.isconcretetype(ExpectedT)
+        return ExpectedT
+    end
+
+    haskey(ref, "type") || throw(ArgumentError("Missing parameter type metadata in dataset parameter reference."))
+    resolved = _dataset_resolve_type_from_name(string(ref["type"]))
+
+    resolved <: ExpectedT || throw(ArgumentError("Resolved parameter type $(resolved) is incompatible with expected type $(ExpectedT)."))
+    Base.isconcretetype(resolved) || throw(ArgumentError("Resolved parameter type $(resolved) must be concrete."))
+
+    return resolved
+end
+
+function _dataset_resolve_type_from_name(type_name::AbstractString)
+    expr = Meta.parse(String(type_name))
+    resolved = _dataset_resolve_type_expr(expr)
+    resolved isa Type || throw(ArgumentError("Resolved value for '$type_name' is not a type."))
+    return resolved
+end
+
+function _dataset_resolve_type_expr(expr::Symbol)
+    if isdefined(Main, expr)
+        return getfield(Main, expr)
+    elseif isdefined(@__MODULE__, expr)
+        return getfield(@__MODULE__, expr)
+    end
+    throw(ArgumentError("Unable to resolve symbol '$expr' while loading dataset parameter reference."))
+end
+
+function _dataset_resolve_type_expr(expr::Expr)
+    expr.head == :. || throw(ArgumentError("Unsupported type expression '$(expr)' in dataset parameter reference."))
+    length(expr.args) == 2 || throw(ArgumentError("Unsupported dotted type expression '$(expr)' in dataset parameter reference."))
+
+    left = _dataset_resolve_type_expr(expr.args[1])
+    right_node = expr.args[2]
+    right_symbol = right_node isa QuoteNode ? right_node.value : right_node
+    right_symbol isa Symbol || throw(ArgumentError("Unsupported identifier in type expression '$(expr)'."))
+    isdefined(left, right_symbol) || throw(ArgumentError("Unable to resolve '$right_symbol' in type expression '$(expr)'."))
+    return getfield(left, right_symbol)
+end
+
+function _dataset_from_attributes(::Type{T}, attributes::Dict{Symbol,Any}, source::Union{IO.iSourceMedia,Nothing}=nothing) where {T <: iDataSet}
     expected_fields = fieldnames(T)
     expected_set = Set(expected_fields)
 
@@ -215,17 +327,17 @@ function _dataset_from_attributes(::Type{T}, attributes::Dict{Symbol,Any}) where
             throw(ArgumentError("Missing attribute '$field_name' for dataset type $(T)."))
         end
         field_type = fieldtype(T, field_name)
-        push!(values, _dataset_convert_value(field_type, attributes[field_name]))
+        push!(values, _dataset_convert_value(field_type, attributes[field_name], source))
     end
 
     return T(values...)
 end
 
-function _dataset_convert_value(::Type{Any}, value)
+function _dataset_convert_value(::Type{Any}, value, source::Union{IO.iSourceMedia,Nothing}=nothing)
     return value
 end
 
-function _dataset_convert_value(::Type{T}, value) where {T}
+function _dataset_convert_value(::Type{T}, value, source::Union{IO.iSourceMedia,Nothing}=nothing) where {T}
     if value === nothing
         if T >: Nothing
             return nothing
@@ -238,10 +350,27 @@ function _dataset_convert_value(::Type{T}, value) where {T}
         return value
     end
 
+    if T <: iParameters
+        if value isa iParameters
+            value isa T || throw(ArgumentError("Expected value compatible with $(T), got $(typeof(value))."))
+            return value
+        end
+
+        if _is_dataset_parameter_reference(value)
+            isnothing(source) && throw(ArgumentError("Cannot load iParameters dataset field without source context."))
+            parameter_type = _dataset_parameter_target_type(T, value)
+            return read_parameters(parameter_type, source, _dataset_parameter_file(value), _dataset_parameter_relative_path(value))
+        end
+
+        value isa AbstractDict || throw(ArgumentError("Expected object or parameter reference for field type $(T), got $(typeof(value))."))
+        Base.isconcretetype(T) || throw(ArgumentError("Cannot deserialize abstract iParameters field of type $(T) without parameter reference metadata."))
+        return parameters_from_dict(T, value)
+    end
+
     if T <: AbstractVector
         value isa AbstractVector || throw(ArgumentError("Expected array for field type $(T), got $(typeof(value))."))
         element_type = eltype(T)
-        converted_items = [_dataset_convert_value(element_type, item) for item in value]
+        converted_items = [_dataset_convert_value(element_type, item, source) for item in value]
         return convert(T, converted_items)
     end
 
@@ -250,7 +379,7 @@ function _dataset_convert_value(::Type{T}, value) where {T}
         dict_out = Dict{keytype(T), valtype(T)}()
         for (k, v) in value
             converted_key = _dataset_convert_key(keytype(T), k)
-            converted_value = _dataset_convert_value(valtype(T), v)
+            converted_value = _dataset_convert_value(valtype(T), v, source)
             dict_out[converted_key] = converted_value
         end
         return dict_out
@@ -262,7 +391,7 @@ function _dataset_convert_value(::Type{T}, value) where {T}
         for (k, v) in value
             as_symbol_dict[Symbol(k)] = v
         end
-        return _dataset_from_attributes(T, as_symbol_dict)
+        return _dataset_from_attributes(T, as_symbol_dict, source)
     end
 
     if T <: Symbol
@@ -272,8 +401,8 @@ function _dataset_convert_value(::Type{T}, value) where {T}
     return convert(T, value)
 end
 
-function _dataset_convert_value(::Type{Union{Nothing, S}}, value) where {S}
-    return value === nothing ? nothing : _dataset_convert_value(S, value)
+function _dataset_convert_value(::Type{Union{Nothing, S}}, value, source::Union{IO.iSourceMedia,Nothing}=nothing) where {S}
+    return value === nothing ? nothing : _dataset_convert_value(S, value, source)
 end
 
 function _dataset_convert_key(::Type{String}, key)

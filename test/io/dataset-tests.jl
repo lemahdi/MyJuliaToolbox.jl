@@ -5,10 +5,30 @@ using DataFrames
 using JSON
 
 @testset "Dataset IO tests" begin
+    struct OptimizerConfig <: iParameters
+        learning_rate::Float64
+    end
+
+    struct ModelConfig <: iParameters
+        model_name::String
+        optimizer::OptimizerConfig
+    end
+
     struct SampleDataSet <: iDataSet
         users::DataFrame
         orders::DataFrame
         name::String
+        metadata::Dict{String,Any}
+    end
+
+    struct DataSetWithOptionalParams <: iDataSet
+        users::DataFrame
+        maybe_params::Union{Nothing,iParameters}
+    end
+
+    struct DataSetWithParams <: iDataSet
+        users::DataFrame
+        parameters::Union{Nothing,iParameters}
         metadata::Dict{String,Any}
     end
 
@@ -50,6 +70,56 @@ using JSON
             @test typed_loaded.orders isa DataFrame
             @test typed_loaded.name == "demo-dataset"
             @test typed_loaded.metadata["owner"] == "qa"
+        end
+
+        @testset "Union{Nothing, iParameters} roundtrip when nothing" begin
+            optional_dir = joinpath(temp_dir, "optional-params")
+            source = FileSystemMedia(optional_dir)
+            optional_ds = DataSetWithOptionalParams(users_df, nothing)
+
+            write_dataset(source, optional_ds; overwrite=true)
+
+            meta = JSON.parsefile(joinpath(optional_dir, "data.json"))
+            @test haskey(meta, "maybe_params")
+            @test meta["maybe_params"] === nothing
+
+            typed_loaded = read_dataset(DataSetWithOptionalParams, source)
+            @test typed_loaded.maybe_params === nothing
+        end
+
+        @testset "iParameters fields use write/read_parameters" begin
+            params_dir = joinpath(temp_dir, "with-params")
+            source = FileSystemMedia(params_dir)
+
+            model_params = ModelConfig("xgboost", OptimizerConfig(0.05))
+            ds_with_params = DataSetWithParams(
+                users_df,
+                model_params,
+                Dict(
+                    "primary" => model_params,
+                    "collection" => Any[OptimizerConfig(0.1), nothing, model_params],
+                ),
+            )
+
+            write_dataset(source, ds_with_params; overwrite=true)
+
+            data_json = JSON.parsefile(joinpath(params_dir, "data.json"))
+            params_ref = data_json["parameters"]
+            @test params_ref["__kind__"] == "mjt_iParameters_ref"
+            @test params_ref["relative_path"] == "parameters"
+            @test isfile(joinpath(params_dir, "parameters", params_ref["file"]))
+
+            loaded_untyped = read_dataset(source)
+            @test loaded_untyped.attributes[:parameters] isa ModelConfig
+
+            loaded_typed = read_dataset(DataSetWithParams, source)
+            @test loaded_typed.parameters isa ModelConfig
+            @test loaded_typed.parameters.model_name == "xgboost"
+            @test loaded_typed.parameters.optimizer.learning_rate == 0.05
+            @test loaded_typed.metadata["primary"] isa ModelConfig
+            @test loaded_typed.metadata["collection"][1] isa OptimizerConfig
+            @test loaded_typed.metadata["collection"][2] === nothing
+            @test loaded_typed.metadata["collection"][3] isa ModelConfig
         end
 
         @testset "ConsoleMedia write_dataset" begin
