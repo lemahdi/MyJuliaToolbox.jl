@@ -51,18 +51,23 @@ using JSON
             @test isfile(joinpath(temp_dir, "users.arrow"))
             @test isfile(joinpath(temp_dir, "orders.arrow"))
             @test isfile(joinpath(temp_dir, "data.json"))
+            @test isfile(joinpath(temp_dir, "data_info.json"))
 
             meta = JSON.parsefile(joinpath(temp_dir, "data.json"))
             @test meta["name"] == "demo-dataset"
             @test meta["metadata"]["owner"] == "qa"
 
+            info = JSON.parsefile(joinpath(temp_dir, "data_info.json"))
+            @test info["__kind__"] == "mjt_dataset_info"
+            @test occursin("SampleDataSet", String(info["dataset_type"]))
+
             loaded = read_dataset(source)
-            @test loaded isa LoadedDataSet
-            @test loaded.attributes[:users] isa DataFrame
-            @test loaded.attributes[:orders] isa DataFrame
-            @test nrow(loaded.attributes[:users]) == 2
-            @test loaded.attributes[:name] == "demo-dataset"
-            @test loaded.attributes[:metadata]["version"] == 1
+            @test loaded isa SampleDataSet
+            @test loaded.users isa DataFrame
+            @test loaded.orders isa DataFrame
+            @test nrow(loaded.users) == 2
+            @test loaded.name == "demo-dataset"
+            @test loaded.metadata["version"] == 1
 
             typed_loaded = read_dataset(SampleDataSet, source)
             @test typed_loaded isa SampleDataSet
@@ -110,7 +115,8 @@ using JSON
             @test isfile(joinpath(params_dir, "parameters", params_ref["file"]))
 
             loaded_untyped = read_dataset(source)
-            @test loaded_untyped.attributes[:parameters] isa ModelConfig
+            @test loaded_untyped isa DataSetWithParams
+            @test loaded_untyped.parameters isa ModelConfig
 
             loaded_typed = read_dataset(DataSetWithParams, source)
             @test loaded_typed.parameters isa ModelConfig
@@ -132,6 +138,22 @@ using JSON
             @test occursin("Alice", output)
             @test occursin("### data.json", output)
             @test occursin("demo-dataset", output)
+        end
+
+        @testset "read_dataset fallback without data_info" begin
+            legacy_dir = joinpath(temp_dir, "legacy-format")
+            mkpath(legacy_dir)
+            source = FileSystemMedia(legacy_dir)
+
+            write_dataframe(joinpath(legacy_dir, "users.arrow"), users_df; format=:arrow, overwrite=true)
+            open(joinpath(legacy_dir, "data.json"), "w") do io
+                JSON.print(io, Dict("name" => "legacy"))
+            end
+
+            loaded = read_dataset(source)
+            @test loaded isa LoadedDataSet
+            @test loaded.attributes[:users] isa DataFrame
+            @test loaded.attributes[:name] == "legacy"
         end
 
         @testset "Unsupported media handling" begin

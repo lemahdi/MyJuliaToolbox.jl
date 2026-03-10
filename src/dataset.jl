@@ -6,6 +6,8 @@ using JSON
 
 const _DATASET_PARAMETER_REF_KIND = "mjt_iParameters_ref"
 const _DATASET_PARAMETERS_DIR = "parameters"
+const _DATASET_INFO_KIND = "mjt_dataset_info"
+const _DATASET_INFO_FILE = "data_info.json"
 
 export iDataSet, LoadedDataSet, write_dataset, read_dataset
 
@@ -49,6 +51,7 @@ Write dataset fields into a media destination.
 
 - `DataFrame` fields are written as `<fieldname>.<ext>` where extension is based on `type`
 - All other fields are serialized into `data.json`
+- Dataset type metadata is saved into `data_info.json` for auto-typed reads
 
 Supported media sources:
 - `IO.FileSystemMedia`
@@ -95,6 +98,8 @@ function _write_dataset_impl(source::IO.FileSystemMedia, dataset::iDataSet; type
         end
     end
 
+    _write_dataset_info(source.path, typeof(dataset); overwrite=overwrite, pretty=pretty)
+
     return nothing
 end
 
@@ -138,12 +143,60 @@ Supported media source:
 - `IO.FileSystemMedia`
 """
 function read_dataset(source::IO.iSourceMedia; type::Symbol=:arrow)
-    return _read_dataset_impl(source; type=type)
+    loaded = _read_dataset_impl(source; type=type)
+    if loaded isa LoadedDataSet && source isa IO.FileSystemMedia
+        declared_type = _read_dataset_declared_type(source)
+        if !isnothing(declared_type)
+            return _dataset_from_attributes(declared_type, loaded.attributes, source)
+        end
+    end
+    return loaded
 end
 
 function read_dataset(::Type{T}, source::IO.iSourceMedia; type::Symbol=:arrow) where {T <: iDataSet}
-    loaded = read_dataset(source; type=type)
+    loaded = _read_dataset_impl(source; type=type)
     return _dataset_from_attributes(T, loaded.attributes, source)
+end
+
+function _write_dataset_info(base_path::AbstractString, dataset_type::Type; overwrite::Bool=false, pretty::Bool=true)
+    info_path = joinpath(base_path, _DATASET_INFO_FILE)
+    if isfile(info_path) && !overwrite
+        throw(ArgumentError("File already exists: $info_path. Pass overwrite=true to overwrite."))
+    end
+
+    payload = Dict(
+        "__kind__" => _DATASET_INFO_KIND,
+        "dataset_type" => string(dataset_type),
+    )
+
+    open(info_path, "w") do io
+        if pretty
+            JSON.print(io, payload, 2)
+        else
+            JSON.print(io, payload)
+        end
+    end
+
+    return nothing
+end
+
+function _read_dataset_declared_type(source::IO.FileSystemMedia)
+    info_path = joinpath(source.path, _DATASET_INFO_FILE)
+    if !isfile(info_path)
+        return nothing
+    end
+
+    info = JSON.parsefile(info_path)
+    info isa AbstractDict || return nothing
+    haskey(info, "dataset_type") || return nothing
+
+    kind = haskey(info, "__kind__") ? string(info["__kind__"]) : _DATASET_INFO_KIND
+    kind == _DATASET_INFO_KIND || return nothing
+
+    resolved = _dataset_resolve_type_from_name(string(info["dataset_type"]))
+    resolved <: iDataSet || throw(ArgumentError("Resolved dataset type $(resolved) is not a subtype of iDataSet."))
+    Base.isconcretetype(resolved) || throw(ArgumentError("Resolved dataset type $(resolved) must be concrete."))
+    return resolved
 end
 
 function _read_dataset_impl(source::IO.FileSystemMedia; type::Symbol=:arrow)
