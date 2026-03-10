@@ -25,4 +25,20 @@ using Arrow
         @test isequal(dfc.d, df_complex.d)
         @test isequal(dfc.x, df_complex.x)
     end
+
+    @testset "Arrow write supports enum columns" begin
+        @enum Status PENDING DONE
+
+        df_enum = DataFrame(
+            id = [1, 2, 3],
+            status = Union{Missing,Status}[PENDING, missing, DONE],
+        )
+
+        farrow = tempname() * ".arrow"
+        write_dataframe(farrow, df_enum, overwrite=true)
+
+        df_out = read_dataframe(farrow)
+        @test df_out.id == df_enum.id
+        @test isequal(df_out.status, Union{Missing,String}["PENDING", missing, "DONE"])
+    end
 end

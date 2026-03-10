@@ -150,6 +150,25 @@ Write `df::DataFrame` to `path_or_io`.
   replacing an existing file. Set `atomic=false` to opt out of atomic writes.
 - If an IO object is provided, you must specify `format` when it cannot be inferred.
 """
+function _has_enum_columns(df::DataFrame)
+    return any(col -> Base.nonmissingtype(eltype(col)) <: Enum, eachcol(df))
+end
+
+function _normalize_enum_columns_for_arrow(df::DataFrame)
+    if !_has_enum_columns(df)
+        return df
+    end
+
+    normalized = copy(df)
+    for column_name in names(normalized)
+        column = normalized[!, column_name]
+        if Base.nonmissingtype(eltype(column)) <: Enum
+            normalized[!, column_name] = [ismissing(value) ? missing : string(value) for value in column]
+        end
+    end
+    return normalized
+end
+
 function write_dataframe(path::AbstractString, df::DataFrame; format::Symbol = :auto, overwrite::Bool=false, atomic::Bool=true, kwargs...)
     if isfile(path) && !overwrite
         error("File already exists: $path. Pass overwrite=true to overwrite.")
@@ -204,7 +223,7 @@ function write_dataframe(path::AbstractString, df::DataFrame; format::Symbol = :
                 if is_gz
                     error("Gzipped Arrow writing is not supported; write to uncompressed .arrow files")
                 end
-                Arrow.write(tmp_path, df; kwargs...)
+                Arrow.write(tmp_path, _normalize_enum_columns_for_arrow(df); kwargs...)
             else
                 error("Unsupported file extension for writing: $ext; specify format=:csv or format=:arrow")
             end
@@ -236,7 +255,7 @@ function write_dataframe(path::AbstractString, df::DataFrame; format::Symbol = :
             if is_gz
                 error("Gzipped Arrow writing is not supported; write to uncompressed .arrow files")
             end
-            Arrow.write(path, df; kwargs...)
+            Arrow.write(path, _normalize_enum_columns_for_arrow(df); kwargs...)
         else
             error("Unsupported file extension for writing: $ext; specify format=:csv or format=:arrow")
         end
@@ -247,7 +266,7 @@ end
 
 function write_dataframe(io::Base.IO, df::DataFrame; format::Symbol = :auto, kwargs...)
     if format == :arrow
-        Arrow.write(io, df; kwargs...)
+        Arrow.write(io, _normalize_enum_columns_for_arrow(df); kwargs...)
     elseif format == :csv
         CSV.write(io, df; kwargs...)
     else
