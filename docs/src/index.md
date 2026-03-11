@@ -56,6 +56,37 @@ The Media interface supports:
 - **ConsoleMedia**: Stream backend for write-oriented workflows (e.g. logging)
 - **SQLDumpMedia**: Read-only SQL dump backend for table/query extraction
 
+### Comparing DataFrames
+
+Use `compare_dataframes` to match rows by key(s) and report only differences.
+
+```julia
+using MyJuliaToolbox
+using DataFrames
+
+left = DataFrame(id=[1, 2, 3], amount=[10.0, missing, 30.0], code=["A", "B", "C"])
+right = DataFrame(user_id=[1, 2, 4], amount=[10.05, 20.0, 40.0], code=["A", "X", "D"])
+
+result = compare_dataframes(
+  left,
+  right,
+  :id,
+  :user_id,
+  [:amount, :code];
+  precision=Dict(:amount => 0.1),
+  check_type=true,
+  title="daily-reconciliation",
+  max_differences=20,
+)
+
+if !result.equal
+  println(result.differences)
+end
+```
+
+Use `title="..."` to tag each compare run in logs/output, and `logger=AsyncLogger(...)` to emit the same concise comparison report to your configured sink.
+With `color=true`, `passed` checks are shown in green and `failed` checks in red.
+
 ### Writing files
 
 Write CSV or Arrow files (writes are atomic by default):

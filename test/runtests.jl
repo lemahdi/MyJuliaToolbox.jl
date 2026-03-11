@@ -11,6 +11,7 @@ include("io/dataset-tests.jl")
 
 # utils tests
 include("utils/dates-tests.jl")
+include("utils/dataframe-compare-tests.jl")
 
 # parameters tests
 include("parameters/parameters-tests.jl")

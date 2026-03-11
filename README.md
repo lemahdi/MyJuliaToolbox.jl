@@ -75,6 +75,38 @@ For SQLite logging, pass a `DatabaseMedia(db)` and optional `table="logs"` to `A
 Table names must match `[A-Za-z_][A-Za-z0-9_]*` (letters/digits/underscore, not starting with a digit).
 Console logs are colorized by level (`debug/info/warn/error`) by default; disable with `AsyncLogger(ConsoleMedia(); color=false)`.
 
+### Comparing DataFrames
+
+Compare two DataFrames by key(s), report only differences, and control numeric tolerance:
+
+```julia
+using MyJuliaToolbox
+using DataFrames
+
+left = DataFrame(id=[1, 2, 3], amount=[10.0, missing, 30.0], code=["A", "B", "C"])
+right = DataFrame(user_id=[1, 2, 4], amount=[10.05, 20.0, 40.0], code=["A", "X", "D"])
+
+result = compare_dataframes(
+    left,
+    right,
+    :id,
+    :user_id,
+    [:amount, :code];
+    precision=Dict(:amount => 0.1),
+    check_type=true,
+    title="daily-reconciliation",
+    max_differences=20,
+)
+
+if !result.equal
+    # Structured access to all differences
+    println(result.differences)
+end
+```
+
+Use `title="..."` to tag each compare run in logs/output, and `logger=AsyncLogger(...)` to emit the same concise report to your logging sink.
+When `color=true` (default), report summaries show `passed` checks in green and `failed` checks in red.
+
 ### Writing files
 
 Write CSV or Arrow based on extension (supports overwrite flag and compressed CSVs):
