@@ -75,6 +75,14 @@ using JSON
             @test typed_loaded.orders isa DataFrame
             @test typed_loaded.name == "demo-dataset"
             @test typed_loaded.metadata["owner"] == "qa"
+
+            loaded_from_path = read_dataset(temp_dir)
+            @test loaded_from_path isa SampleDataSet
+            @test loaded_from_path.name == "demo-dataset"
+
+            typed_loaded_from_path = read_dataset(SampleDataSet, temp_dir)
+            @test typed_loaded_from_path isa SampleDataSet
+            @test typed_loaded_from_path.metadata["version"] == 1
         end
 
         @testset "Union{Nothing, iParameters} roundtrip when nothing" begin
