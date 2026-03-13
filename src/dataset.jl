@@ -153,9 +153,17 @@ function read_dataset(source::IO.iSourceMedia; type::Symbol=:arrow)
     return loaded
 end
 
+function read_dataset(path::AbstractString; type::Symbol=:arrow)
+    return read_dataset(IO.FileSystemMedia(path); type=type)
+end
+
 function read_dataset(::Type{T}, source::IO.iSourceMedia; type::Symbol=:arrow) where {T <: iDataSet}
     loaded = _read_dataset_impl(source; type=type)
     return _dataset_from_attributes(T, loaded.attributes, source)
+end
+
+function read_dataset(::Type{T}, path::AbstractString; type::Symbol=:arrow) where {T <: iDataSet}
+    return read_dataset(T, IO.FileSystemMedia(path); type=type)
 end
 
 function _write_dataset_info(base_path::AbstractString, dataset_type::Type; overwrite::Bool=false, pretty::Bool=true)
