@@ -98,8 +98,37 @@ using Dates
     end
 
     @testset "Queue overflow drops messages" begin
-        buffer = IOBuffer()
-        source = ConsoleMedia(stream=buffer)
+        # BlockingMedia holds the worker in write_log_record until explicitly released,
+        # so the producer loop can fill the queue and trigger drops deterministically.
+        mutable struct BlockingTestMedia <: iSourceMedia
+            should_block::Bool
+            cond::Threads.Condition
+        end
+        function BlockingTestMedia()
+            l = ReentrantLock()
+            BlockingTestMedia(true, Threads.Condition(l))
+        end
+        function MyJuliaToolbox.IO.write_log_record(source::BlockingTestMedia, record::MyJuliaToolbox.IO.LogRecord; kwargs...)
+            lock(source.cond.lock)
+            try
+                while source.should_block
+                    wait(source.cond)
+                end
+            finally
+                unlock(source.cond.lock)
+            end
+        end
+        function unblock!(source::BlockingTestMedia)
+            lock(source.cond.lock)
+            try
+                source.should_block = false
+                notify(source.cond; all=true)
+            finally
+                unlock(source.cond.lock)
+            end
+        end
+
+        source = BlockingTestMedia()
         logger = AsyncLogger(source; min_level=:debug, capacity=2)
 
         accepted = 0
@@ -107,6 +136,7 @@ using Dates
             accepted += log_debug!(logger, "burst-$i") ? 1 : 0
         end
 
+        unblock!(source)
         stop_logger!(logger)
         dropped = dropped_logs(logger)
 
