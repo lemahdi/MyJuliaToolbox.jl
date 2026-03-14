@@ -73,6 +73,9 @@ function _validated_table_identifier(identifier::String; field::String="identifi
     if match(r"^[A-Za-z_][A-Za-z0-9_]*$", identifier) === nothing
         throw(ArgumentError("Invalid $field '$identifier'. Use only letters, digits, and underscore."))
     end
+    if uppercase(identifier) in _SQL_RESERVED_KEYWORDS
+        throw(ArgumentError("Invalid $field '$identifier': reserved SQL keyword. Choose a different name."))
+    end
     return identifier
 end
 
