@@ -214,6 +214,61 @@ function read_dataframe(source::SQLDumpMedia; table::Union{String,Nothing}=nothi
 end
 
 """
+    _unescape_mysql_string_values(stmt::String) -> String
+
+Single-pass conversion of MySQL backslash escape sequences to their SQLite equivalents.
+
+MySQL uses backslash escaping inside string literals; SQLite does not.
+Conversions applied:
+- `\\'` → `''`  (escaped single quote → SQLite literal quote)
+- `\\\\` → `\\`  (escaped backslash → literal backslash)
+- `\\n` → newline
+- `\\r` → carriage return
+- `\\t` → tab
+- `\\b` → backspace
+- `\\0` → (dropped; SQLite TEXT cannot store null bytes)
+- Any other `\\X` → `X` (pass through the escaped character)
+"""
+function _unescape_mysql_string_values(stmt::String)
+    buf = IOBuffer()
+    i = firstindex(stmt)
+    while i <= ncodeunits(stmt)
+        c = stmt[i]
+        if c == '\\'
+            j = nextind(stmt, i)
+            if j <= ncodeunits(stmt)
+                next_c = stmt[j]
+                if next_c == '\''
+                    write(buf, "''")
+                elseif next_c == '\\'
+                    write(buf, '\\')
+                elseif next_c == 'n'
+                    write(buf, '\n')
+                elseif next_c == 'r'
+                    write(buf, '\r')
+                elseif next_c == 't'
+                    write(buf, '\t')
+                elseif next_c == 'b'
+                    write(buf, '\b')
+                elseif next_c == '0'
+                    nothing  # null byte — silently dropped
+                else
+                    write(buf, next_c)  # unknown escape: keep the escaped char
+                end
+                i = nextind(stmt, j)
+            else
+                write(buf, c)  # trailing backslash: keep as-is
+                i = nextind(stmt, i)
+            end
+        else
+            write(buf, c)
+            i = nextind(stmt, i)
+        end
+    end
+    return String(take!(buf))
+end
+
+"""
     _load_sql_dump!(db, path::String, db_type::Symbol)
 
 Internal function to load a SQL dump file into a SQLite database with syntax conversion.
@@ -297,11 +352,8 @@ function _load_sql_dump!(db, path::String, db_type::Symbol)
             elseif occursin(r"^INSERT INTO", line)
                 # Handle INSERT statements
                 stmt = replace(line, r"[`\"]" => "")
-                
-                # Convert MySQL backslash escaping to SQLite double-apostrophe format
-                # MySQL: 'L\'oriental' -> SQLite: 'L''oriental'
-                stmt = replace(stmt, r"\\'" => "''")
-                
+                stmt = _unescape_mysql_string_values(stmt)
+
                 try
                     SQLite.execute(db, stmt)
                 catch e
