@@ -52,6 +52,25 @@ function _ensure_columns_exist(df::DataFrame, columns::Vector{Symbol}, label::St
     return nothing
 end
 
+const _SENTINEL_COLUMNS = Set([:__occurrence__, :__row_id__, :__source__])
+
+function _check_sentinel_collisions(left::DataFrame, right::DataFrame)
+    left_names  = Set(Symbol.(names(left)))
+    right_names = Set(Symbol.(names(right)))
+    collisions = union(
+        intersect(left_names,  _SENTINEL_COLUMNS),
+        intersect(right_names, _SENTINEL_COLUMNS),
+    )
+    if !isempty(collisions)
+        throw(ArgumentError(
+            "Input DataFrames contain reserved internal column name(s): " *
+            join(string.(sort!(collect(collisions))), ", ") *
+            ". Rename these columns before calling compare_dataframes."
+        ))
+    end
+    return nothing
+end
+
 function _resolve_target_columns(
     left::DataFrame,
     right::DataFrame,
@@ -303,6 +322,8 @@ function compare_dataframes(
     emit_console::Bool=true,
     max_differences::Int=25,
 )
+    _check_sentinel_collisions(left, right)
+
     normalized_left_keys = _normalize_columns(left_keys, "left_keys")
     normalized_right_keys = _normalize_columns(right_keys, "right_keys")
     length(normalized_left_keys) == length(normalized_right_keys) ||
@@ -394,20 +415,30 @@ function compare_dataframes(
                 continue
             end
 
+            # One issue per cell: type_mismatch takes priority so that each cell
+            # contributes exactly one row to `differences` and one count to
+            # `failed_checks`, keeping nrow(result.differences) == failed_checks.
+            # When a type mismatch also carries a numeric diff that detail is
+            # embedded in the single row rather than producing a second row.
             cell_has_failure = false
 
             if check_type && typeof(left_value) != typeof(right_value)
                 type_mismatches += 1
                 cell_has_failure = true
+                extra_detail = if left_value isa Number && right_value isa Number
+                    tolerance = _precision_for_column(precision, target)
+                    !_numbers_equal(left_value, right_value, tolerance) ?
+                        ", abs_diff=$(abs(float(left_value) - float(right_value))), tolerance=$tolerance" : ""
+                else
+                    ""
+                end
                 push!(issues, "type_mismatch")
                 push!(columns, String(target))
                 push!(keys, key_text)
                 push!(left_values, _value_text(left_value))
                 push!(right_values, _value_text(right_value))
-                push!(details, "left_type=$(typeof(left_value)), right_type=$(typeof(right_value))")
-            end
-
-            if left_value isa Number && right_value isa Number
+                push!(details, "left_type=$(typeof(left_value)), right_type=$(typeof(right_value))$(extra_detail)")
+            elseif left_value isa Number && right_value isa Number
                 tolerance = _precision_for_column(precision, target)
                 if !_numbers_equal(left_value, right_value, tolerance)
                     numeric_mismatches += 1
@@ -483,5 +514,22 @@ function compare_dataframes(
     target_columns=nothing;
     kwargs...,
 )
+    # Guard against the common mistake of passing right_keys as target_columns.
+    # e.g. compare_dataframes(l, r, :id, :user_id) — the 4th positional arg is
+    # target_columns here, not right_keys. If the 4th arg overlaps with the key
+    # names the user almost certainly meant the 5-argument form.
+    if !isnothing(target_columns)
+        normalized_keys    = _normalize_columns(keys, "keys")
+        normalized_targets = _normalize_columns(target_columns, "target_columns")
+        overlapping = intersect(Set(normalized_keys), Set(normalized_targets))
+        if !isempty(overlapping)
+            throw(ArgumentError(
+                "Column(s) $(join(string.(sort!(collect(overlapping))), ", ")) " *
+                "appear in both keys and target_columns. " *
+                "To use different key names for each side, use the 5-argument form: " *
+                "compare_dataframes(left, right, left_keys, right_keys, target_columns)."
+            ))
+        end
+    end
     return compare_dataframes(left, right, keys, keys, target_columns; kwargs...)
 end
