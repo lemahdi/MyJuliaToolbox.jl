@@ -9,6 +9,10 @@ const _DATASET_PARAMETERS_DIR = "parameters"
 const _DATASET_INFO_KIND = "mjt_dataset_info"
 const _DATASET_INFO_FILE = "data_info.json"
 
+# Cache mapping serialized type names to their resolved Julia Type objects.
+# Avoids repeated Meta.parse + module traversal on every read_dataset call.
+const _DATASET_TYPE_CACHE = Dict{String, Type}()
+
 export iDataSet, LoadedDataSet, write_dataset, read_dataset
 
 """
@@ -345,19 +349,28 @@ function _dataset_parameter_target_type(::Type{ExpectedT}, ref::AbstractDict) wh
 end
 
 function _dataset_resolve_type_from_name(type_name::AbstractString)
-    expr = Meta.parse(String(type_name))
+    cache_key = String(type_name)
+    haskey(_DATASET_TYPE_CACHE, cache_key) && return _DATASET_TYPE_CACHE[cache_key]
+    expr = Meta.parse(cache_key)
     resolved = _dataset_resolve_type_expr(expr)
     resolved isa Type || throw(ArgumentError("Resolved value for '$type_name' is not a type."))
+    _DATASET_TYPE_CACHE[cache_key] = resolved
     return resolved
 end
 
 function _dataset_resolve_type_expr(expr::Symbol)
-    if isdefined(Main, expr)
-        return getfield(Main, expr)
-    elseif isdefined(@__MODULE__, expr)
-        return getfield(@__MODULE__, expr)
+    # 1. Main namespace (user code loaded at top level)
+    isdefined(Main, expr) && return getfield(Main, expr)
+    # 2. This module
+    isdefined(@__MODULE__, expr) && return getfield(@__MODULE__, expr)
+    # 3. All currently loaded packages — catches types defined in any using'd module
+    for mod in values(Base.loaded_modules)
+        if isdefined(mod, expr)
+            val = getfield(mod, expr)
+            val isa Type && return val
+        end
     end
-    throw(ArgumentError("Unable to resolve symbol '$expr' while loading dataset parameter reference."))
+    throw(ArgumentError("Unable to resolve symbol '$expr'. Make sure the package that defines it is loaded."))
 end
 
 function _dataset_resolve_type_expr(expr::Expr)

@@ -183,6 +183,9 @@ function _validated_sql_identifier(identifier::String; field::String="identifier
     if match(r"^[A-Za-z_][A-Za-z0-9_]*$", identifier) === nothing
         throw(ArgumentError("Invalid $field '$identifier'. Use only letters, digits, and underscore."))
     end
+    if uppercase(identifier) in _SQL_RESERVED_KEYWORDS
+        throw(ArgumentError("Invalid $field '$identifier': reserved SQL keyword. Choose a different name."))
+    end
     return identifier
 end
 
@@ -274,6 +277,9 @@ Returns `true` when accepted (or skipped due to level filtering), `false` when d
 because the queue is full or logger is closed.
 """
 function log!(logger::AsyncLogger, level::Symbol, message::AbstractString; metadata=nothing)
+    if istaskfailed(logger.worker)
+        return false
+    end
     if !_should_log(logger.min_level, level)
         return true
     end
@@ -302,6 +308,10 @@ function flush_logger!(logger::AsyncLogger)
         current_count = _count(logger.queue)
         if current_count == 0
             break
+        end
+
+        if istaskfailed(logger.worker)
+            throw(ErrorException("Logger worker task failed; queue cannot be drained."))
         end
 
         if current_count == last_count

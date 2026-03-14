@@ -224,13 +224,13 @@ function _looks_like_json_file(value::AbstractString)
 end
 
 function _parameters_from_url(::Type{T}, url::AbstractString) where {T <: iParameters}
-    temp_path, temp_io = mktemp()
+    temp_dir = mktempdir()
     try
-        close(temp_io)
+        temp_path = joinpath(temp_dir, "params.json")
         Downloads.download(url, temp_path)
         return parameters_from_json(T, temp_path)
     finally
-        rm(temp_path; force=true)
+        rm(temp_dir; recursive=true, force=true)
     end
 end
 

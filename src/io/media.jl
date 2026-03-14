@@ -6,12 +6,71 @@ using SQLite
 
 export iSourceMedia, FileSystemMedia, DatabaseMedia, SQLDumpMedia, ConsoleMedia
 
+# SQLite reserved keywords that must not be used as bare (unquoted) identifiers.
+# Source: https://www.sqlite.org/lang_keywords.html
+const _SQL_RESERVED_KEYWORDS = Set{String}([
+    "ABORT", "ACTION", "ADD", "AFTER", "ALL", "ALTER", "ANALYZE", "AND", "AS", "ASC",
+    "ATTACH", "AUTOINCREMENT", "BEFORE", "BEGIN", "BETWEEN", "BY", "CASCADE", "CASE",
+    "CAST", "CHECK", "COLLATE", "COLUMN", "COMMIT", "CONFLICT", "CONSTRAINT", "CREATE",
+    "CROSS", "CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "DATABASE", "DEFAULT",
+    "DEFERRABLE", "DEFERRED", "DELETE", "DESC", "DETACH", "DISTINCT", "DROP", "EACH",
+    "ELSE", "END", "ESCAPE", "EXCEPT", "EXCLUSIVE", "EXISTS", "EXPLAIN", "FAIL", "FOR",
+    "FOREIGN", "FROM", "FULL", "GLOB", "GROUP", "HAVING", "IF", "IGNORE", "IMMEDIATE",
+    "IN", "INDEX", "INDEXED", "INITIALLY", "INNER", "INSERT", "INSTEAD", "INTERSECT",
+    "INTO", "IS", "ISNULL", "JOIN", "KEY", "LEFT", "LIKE", "LIMIT", "MATCH", "NATURAL",
+    "NO", "NOT", "NOTNULL", "NULL", "OF", "OFFSET", "ON", "OR", "ORDER", "OUTER",
+    "PLAN", "PRAGMA", "PRIMARY", "QUERY", "RAISE", "RECURSIVE", "REFERENCES", "REGEXP",
+    "REINDEX", "RELEASE", "RENAME", "REPLACE", "RESTRICT", "RIGHT", "ROLLBACK", "ROW",
+    "SAVEPOINT", "SELECT", "SET", "TABLE", "TEMP", "TEMPORARY", "THEN", "TO",
+    "TRANSACTION", "TRIGGER", "UNION", "UNIQUE", "UPDATE", "USING", "VACUUM", "VALUES",
+    "VIEW", "VIRTUAL", "WHEN", "WHERE", "WITH", "WITHOUT",
+])
+
 """
     abstract type iSourceMedia
 
-Abstract base type for media backends. Concrete implementations should define
-how they support reading, writing, or both for specific media types
-(filesystem, database, dump files, console streams, etc.).
+Abstract base type for all media backends. Subtypes represent a specific
+storage or transport mechanism (file system, database, SQL dump, console, …).
+
+## Implementing a new media type
+
+Declare your struct as a subtype of `iSourceMedia`:
+
+```julia
+struct MyMedia <: iSourceMedia
+    # your fields
+end
+```
+
+Then add methods for the operations you want to support. All methods are
+optional — unimplemented ones fall back to a descriptive `ArgumentError`.
+
+| Operation | Method signature to implement |
+|---|---|
+| Read a DataFrame | `read_dataframe(m::MyMedia; kwargs...) -> DataFrame` |
+| Write a DataFrame | `write_dataframe(m::MyMedia, filename, df; kwargs...)` |
+| Write a log record | `write_log_record(m::MyMedia, record::LogRecord; kwargs...)` |
+| Read dataset | `_read_dataset_impl(m::MyMedia; type) -> LoadedDataSet` |
+| Write dataset | `_write_dataset_impl(m::MyMedia, dataset; kwargs...)` |
+
+## Read-only vs write-only
+
+A read-only media type (e.g. `SQLDumpMedia`) should implement only the read
+methods and explicitly throw `ArgumentError` in the write methods:
+
+```julia
+write_dataframe(m::MyMedia, args...; kwargs...) =
+    throw(ArgumentError("MyMedia is read-only"))
+```
+
+## Existing concrete types
+
+| Type | Read | Write | Notes |
+|---|---|---|---|
+| `FileSystemMedia` | ✓ CSV/Arrow | ✓ CSV/Arrow | format inferred from extension |
+| `DatabaseMedia` | ✓ SQLite | ✓ SQLite | pass `table=` or `query=` |
+| `SQLDumpMedia` | ✓ (converted to in-memory SQLite) | ✗ | read-only |
+| `ConsoleMedia` | ✗ | ✓ log/CSV to stream | write-only |
 """
 abstract type iSourceMedia end
 
