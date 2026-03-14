@@ -111,4 +111,75 @@ using DataFrames
         @test occursin("checks: passed=", log_output)
         @test occursin("failed=1", log_output)
     end
+
+    # #12 — nrow(differences) == failed_checks invariant: cells with both a
+    # type mismatch and a numeric diff must produce exactly one row each.
+    @testset "nrow(differences) == failed_checks invariant" begin
+        left  = DataFrame(id=[1, 2], value=[Int(1),   Int(10)])
+        right = DataFrame(id=[1, 2], value=[Float64(1.5), Float64(20.0)])
+
+        result = compare_dataframes(
+            left, right, :id, [:value];
+            check_type=true, emit_console=false,
+        )
+
+        @test !result.equal
+        @test nrow(result.differences) == result.failed_checks
+        # Both cells: type mismatch (Int vs Float64) + numeric diff → 1 row each
+        @test result.type_mismatches == 2
+        @test result.numeric_mismatches == 0  # absorbed into type_mismatch row
+        @test nrow(result.differences) == 2
+        # Detail string should contain abs_diff for the mismatch
+        @test all(occursin("abs_diff", row.detail) for row in eachrow(result.differences))
+    end
+
+    # #13 — duplicate key rows are disambiguated by occurrence index.
+    @testset "Duplicate key rows (occurrence > 1)" begin
+        left  = DataFrame(id=[1, 1, 2], value=[10, 20, 30])
+        right = DataFrame(id=[1, 1, 2], value=[10, 99, 30])
+
+        result = compare_dataframes(
+            left, right, :id, [:value]; emit_console=false,
+        )
+
+        @test !result.equal
+        @test result.compared_rows == 3
+        @test result.value_mismatches == 1
+        @test result.failed_checks == 1
+        @test nrow(result.differences) == 1
+        # The key text for the differing row should indicate occurrence=2
+        @test occursin("occurrence=2", result.differences[1, :key])
+    end
+
+    # #14 — silent mode: emit_console=false + no logger still returns result.
+    @testset "Silent mode (emit_console=false, no logger)" begin
+        left  = DataFrame(id=[1], value=["A"])
+        right = DataFrame(id=[1], value=["B"])
+
+        result = compare_dataframes(
+            left, right, :id, [:value];
+            emit_console=false, logger=nothing,
+        )
+
+        @test !result.equal
+        @test result.value_mismatches == 1
+        @test nrow(result.differences) == 1
+    end
+
+    # #15 — sentinel column names raise a clear ArgumentError.
+    @testset "Sentinel column collision raises ArgumentError" begin
+        left  = DataFrame(id=[1], __occurrence__=[42], value=[1])
+        right = DataFrame(id=[1], __occurrence__=[42], value=[2])
+
+        @test_throws ArgumentError compare_dataframes(
+            left, right, :id, [:value]; emit_console=false,
+        )
+
+        left2  = DataFrame(id=[1], __source__=["x"], value=[1])
+        right2 = DataFrame(id=[1], __source__=["x"], value=[2])
+
+        @test_throws ArgumentError compare_dataframes(
+            left2, right2, :id, [:value]; emit_console=false,
+        )
+    end
 end
