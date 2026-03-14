@@ -144,7 +144,7 @@ using DataFrames
 
         @test !result.equal
         @test result.compared_rows == 3
-        @test result.value_mismatches == 1
+        @test result.numeric_mismatches == 1  # Int values → numeric path, not value_mismatch
         @test result.failed_checks == 1
         @test nrow(result.differences) == 1
         # The key text for the differing row should indicate occurrence=2
