@@ -1,8 +1,32 @@
 using DataFrames
 using ..IO: AsyncLogger, log_info!, log_warn!
 
-export compare_dataframes
+export compare_dataframes, DataFrameComparisonResult
 
+"""
+    DataFrameComparisonResult
+
+Returned by [`compare_dataframes`](@ref). All counters are non-negative integers.
+
+## Fields
+
+| Field | Description |
+|---|---|
+| `title` | Label passed via the `title` keyword argument (empty string if omitted). |
+| `equal` | `true` when no differences were found (`nrow(differences) == 0`). |
+| `compared_rows` | Number of rows present in **both** DataFrames (matched by key). Left-only and right-only rows are excluded. |
+| `target_columns` | Ordered list of target columns that were compared. |
+| `total_checks` | Total cell-level checks performed: one per (matched row × target column) plus one per left-only/right-only row. |
+| `passed_checks` | Checks in which the two values were considered equal. |
+| `failed_checks` | Checks in which a difference was found. Always equals `nrow(differences)`. |
+| `left_only_rows` | Rows present in `left` but absent in `right` after key-matching. |
+| `right_only_rows` | Rows present in `right` but absent in `left` after key-matching. |
+| `missing_mismatches` | Cells where exactly one side is `missing`. |
+| `type_mismatches` | Cells where `typeof(left_value) != typeof(right_value)` and `check_type=true`. When a type mismatch also carries a numeric diff the abs_diff appears in the `detail` column of `differences`; no separate numeric_mismatch row is produced. |
+| `numeric_mismatches` | Cells (same type or `check_type=false`) where both values are `Number` and differ beyond the tolerance. |
+| `value_mismatches` | Non-numeric cells where `!isequal(left_value, right_value)`. |
+| `differences` | DataFrame with columns `issue`, `column`, `key`, `left_value`, `right_value`, `detail` — one row per failed check. |
+"""
 struct DataFrameComparisonResult
     title::String
     equal::Bool
@@ -102,7 +126,7 @@ function _occurrence_index(df::DataFrame, keys::Vector{Symbol})
     row_count == 0 && return Int[]
 
     occurrence = zeros(Int, row_count)
-    key_df = select(df, keys, copycols=false)
+    key_df = select(df, keys)  # copy columns; avoids sharing mutation risk
     key_df[!, :__row_id__] = 1:row_count
 
     for group in groupby(key_df, keys; sort=false)
@@ -118,10 +142,10 @@ end
 function _prepare_left(df::DataFrame, keys::Vector{Symbol}, targets::Vector{Symbol})
     prepared = DataFrame()
     for key in keys
-        prepared[!, key] = df[!, key]
+        prepared[!, key] = copy(df[!, key])
     end
     for target in targets
-        prepared[!, Symbol(target, "__left")] = df[!, target]
+        prepared[!, Symbol(target, "__left")] = copy(df[!, target])
     end
     prepared[!, :__occurrence__] = _occurrence_index(df, keys)
     return prepared
@@ -130,10 +154,10 @@ end
 function _prepare_right(df::DataFrame, right_keys::Vector{Symbol}, left_keys::Vector{Symbol}, targets::Vector{Symbol})
     prepared = DataFrame()
     for (right_key, left_key) in zip(right_keys, left_keys)
-        prepared[!, left_key] = df[!, right_key]
+        prepared[!, left_key] = copy(df[!, right_key])
     end
     for target in targets
-        prepared[!, Symbol(target, "__right")] = df[!, target]
+        prepared[!, Symbol(target, "__right")] = copy(df[!, target])
     end
     prepared[!, :__occurrence__] = _occurrence_index(df, right_keys)
     return prepared
@@ -190,6 +214,8 @@ function _emit_line(io::Base.IO, text::String; color::Bool=true, level::Symbol=:
             :green
         elseif level == :warn
             :red
+        elseif level == :detail
+            :normal   # difference rows: plain text, not yellow (which reads as a warning header)
         else
             :yellow
         end
@@ -234,9 +260,9 @@ function _render_comparison_report(
 )
     title_prefix = _title_prefix(result.title)
     summary = if result.equal
-        "$(title_prefix)✓ DataFrame comparison passed (rows=$(result.compared_rows), targets=$(length(result.target_columns)), no differences)."
+        "$(title_prefix)PASS DataFrame comparison passed (rows=$(result.compared_rows), targets=$(length(result.target_columns)), no differences)."
     else
-        "$(title_prefix)✗ DataFrame comparison found $(nrow(result.differences)) differences (left_only=$(result.left_only_rows), right_only=$(result.right_only_rows), missing=$(result.missing_mismatches), type=$(result.type_mismatches), numeric=$(result.numeric_mismatches), value=$(result.value_mismatches))."
+        "$(title_prefix)FAIL DataFrame comparison found $(nrow(result.differences)) differences (left_only=$(result.left_only_rows), right_only=$(result.right_only_rows), missing=$(result.missing_mismatches), type=$(result.type_mismatches), numeric=$(result.numeric_mismatches), value=$(result.value_mismatches))."
     end
 
     if emit_console
