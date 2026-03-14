@@ -60,7 +60,7 @@ function read_dataframe(tbl; format::Symbol = :auto, kwargs...)
     elseif Tables.istable(tbl)
         return DataFrame(tbl)
     else
-        error("Unsupported input type for read_dataframe: $(typeof(tbl))")
+        throw(ArgumentError("Unsupported input type for read_dataframe: $(typeof(tbl))"))
     end
 end
 
@@ -87,7 +87,7 @@ function read_dataframe(path::AbstractString; format::Symbol = :auto, kwargs...)
         end
     elseif format == :arrow || ext in (".arrow", ".feather")
         if is_gz
-            error("Gzipped Arrow files are not supported; please provide an uncompressed .arrow file")
+            throw(ArgumentError("Gzipped Arrow files are not supported; please provide an uncompressed .arrow file"))
         end
         return read_arrow_to_df(path; kwargs...)
     else
@@ -171,7 +171,7 @@ end
 
 function write_dataframe(path::AbstractString, df::DataFrame; format::Symbol = :auto, overwrite::Bool=false, atomic::Bool=true, kwargs...)
     if isfile(path) && !overwrite
-        error("File already exists: $path. Pass overwrite=true to overwrite.")
+        throw(ArgumentError("File already exists: $path. Pass overwrite=true to overwrite."))
     end
 
     p = path
@@ -221,11 +221,11 @@ function write_dataframe(path::AbstractString, df::DataFrame; format::Symbol = :
                 end
             elseif format == :arrow || ext in (".arrow", ".feather")
                 if is_gz
-                    error("Gzipped Arrow writing is not supported; write to uncompressed .arrow files")
+                    throw(ArgumentError("Gzipped Arrow writing is not supported; write to uncompressed .arrow files"))
                 end
                 Arrow.write(tmp_path, _normalize_enum_columns_for_arrow(df); kwargs...)
             else
-                error("Unsupported file extension for writing: $ext; specify format=:csv or format=:arrow")
+                throw(ArgumentError("Unsupported file extension for writing: $ext; specify format=:csv or format=:arrow"))
             end
             _finalize_temp(tmp_path)
         catch err
@@ -253,11 +253,11 @@ function write_dataframe(path::AbstractString, df::DataFrame; format::Symbol = :
             end
         elseif format == :arrow || ext in (".arrow", ".feather")
             if is_gz
-                error("Gzipped Arrow writing is not supported; write to uncompressed .arrow files")
+                throw(ArgumentError("Gzipped Arrow writing is not supported; write to uncompressed .arrow files"))
             end
             Arrow.write(path, _normalize_enum_columns_for_arrow(df); kwargs...)
         else
-            error("Unsupported file extension for writing: $ext; specify format=:csv or format=:arrow")
+            throw(ArgumentError("Unsupported file extension for writing: $ext; specify format=:csv or format=:arrow"))
         end
     end
 

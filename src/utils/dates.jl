@@ -189,7 +189,7 @@ function add_days_convention(d::Date, delta::Integer; convention::Symbol=:follow
         elseif "ref_dt" in names(holidays)
             col = holidays[!, "ref_dt"]
         else
-            error("calendar DataFrame must contain a :ref_dt column of Date or integer yyyymmdd values")
+            throw(ArgumentError("calendar DataFrame must contain a :ref_dt column of Date or integer yyyymmdd values"))
         end
         for r in col
             push!(calset, _to_date(r))
@@ -206,7 +206,7 @@ function add_days_convention(d::Date, delta::Integer; convention::Symbol=:follow
             end
             calendar_is_business = false
         catch
-            error("Unsupported holidays type: $(typeof(holidays)). Expect Vector/Set of Date or integer yyyymmdd, or DataFrame with :ref_dt.")
+            throw(ArgumentError("Unsupported holidays type: $(typeof(holidays)). Expect Vector/Set of Date or integer yyyymmdd, or DataFrame with :ref_dt."))
         end
     end
 
@@ -231,7 +231,7 @@ function add_days_convention(d::Date, delta::Integer; convention::Symbol=:follow
             return adj
         end
     else
-        error("Unsupported convention: $convention. Supported: :following, :modified_following, :previous, :modified_previous")
+        throw(ArgumentError("Unsupported convention: $convention. Supported: :following, :modified_following, :previous, :modified_previous"))
     end
 end
 

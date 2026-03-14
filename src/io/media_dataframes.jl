@@ -44,10 +44,10 @@ Provide one of: `table` parameter or `query` parameter.
 """
 function read_dataframe(source::DatabaseMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
     if isnothing(table) && isnothing(query)
-        error("For DatabaseMedia, provide either query=<sql> or table=<table_name>")
+        throw(ArgumentError("For DatabaseMedia, provide either query=<sql> or table=<table_name>"))
     end
     if !isnothing(table) && !isnothing(query)
-        error("Provide only one of query or table for DatabaseMedia reads")
+        throw(ArgumentError("Provide only one of query or table for DatabaseMedia reads"))
     end
 
     sql_query = if isnothing(query)
@@ -61,7 +61,7 @@ function read_dataframe(source::DatabaseMedia; table::Union{String,Nothing}=noth
         if source.db_type == :sqlite && conn isa SQLite.DB
             return SQLite.DBInterface.execute(conn, sql_query) |> DataFrame
         end
-        error("Database reading not implemented for db_type=$(source.db_type), connection=$(typeof(conn))")
+        throw(ArgumentError("Database reading not implemented for db_type=$(source.db_type), connection=$(typeof(conn))"))
     end
 end
 
@@ -128,14 +128,14 @@ function write_dataframe(source::DatabaseMedia, table::AbstractString, df::DataF
             SQLite.load!(df, conn, final_table)
             return nothing
         end
-        error("Database writing not implemented for db_type=$(source.db_type), connection=$(typeof(conn))")
+        throw(ArgumentError("Database writing not implemented for db_type=$(source.db_type), connection=$(typeof(conn))"))
     end
 end
 
 function write_dataframe(source::DatabaseMedia, df::DataFrame; kwargs...)
     table = get(Dict(kwargs), :table, nothing)
     if isnothing(table)
-        error("For DatabaseMedia writes, provide table=<table_name> or use write_dataframe(source, table, df)")
+        throw(ArgumentError("For DatabaseMedia writes, provide table=<table_name> or use write_dataframe(source, table, df)"))
     end
     return write_dataframe(source, String(table), df; kwargs...)
 end
@@ -154,11 +154,11 @@ function write_dataframe(source::SQLDumpMedia, target::AbstractString, df::DataF
 end
 
 function write_dataframe(source::iSourceMedia, df::DataFrame; kwargs...)
-    error("write_dataframe not implemented for iSourceMedia type: $(typeof(source))")
+    throw(ArgumentError("write_dataframe not implemented for iSourceMedia type: $(typeof(source))"))
 end
 
 function write_dataframe(source::iSourceMedia, target::AbstractString, df::DataFrame; kwargs...)
-    error("write_dataframe not implemented for iSourceMedia type: $(typeof(source))")
+    throw(ArgumentError("write_dataframe not implemented for iSourceMedia type: $(typeof(source))"))
 end
 
 """
@@ -182,7 +182,7 @@ Read a DataFrame from a SQLDumpMedia by loading the SQL dump into SQLite and que
 """
 function read_dataframe(source::SQLDumpMedia; table::Union{String,Nothing}=nothing, query::Union{String,Nothing}=nothing, kwargs...)
     if !isnothing(table) && !isnothing(query)
-        error("Cannot provide both 'table' and 'query'. Choose one.")
+        throw(ArgumentError("Cannot provide both 'table' and 'query'. Choose one."))
     end
 
     # Create SQLite database
@@ -465,5 +465,5 @@ end
 - `kwargs...`: Additional keyword arguments
 """
 function read_dataframe(source::iSourceMedia; kwargs...)
-    error("read_dataframe not implemented for iSourceMedia type: $(typeof(source))")
+    throw(ArgumentError("read_dataframe not implemented for iSourceMedia type: $(typeof(source))"))
 end

@@ -245,8 +245,8 @@ using SQLite
         # Generic fallback for unknown media subtype
         struct DummyMedia <: iSourceMedia end
         dummy = DummyMedia()
-        @test_throws ErrorException write_dataframe(dummy, test_df)
-        @test_throws ErrorException write_dataframe(dummy, "target", test_df)
+        @test_throws ArgumentError write_dataframe(dummy, test_df)
+        @test_throws ArgumentError write_dataframe(dummy, "target", test_df)
     end
     
     # ==================================================================

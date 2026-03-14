@@ -36,7 +36,7 @@ using DataFrames
         # overwrite behavior
         fow = tempname() * ".csv"
         write_dataframe(fow, dfw)
-        @test_throws ErrorException write_dataframe(fow, dfw, overwrite=false)
+        @test_throws ArgumentError write_dataframe(fow, dfw, overwrite=false)
         write_dataframe(fow, dfw, overwrite=true)
 
         # IO write/read with explicit format
@@ -60,7 +60,7 @@ using DataFrames
         # atomic write without overwrite should error and original file remain (default atomic)
         f_atomic2 = tempname() * ".csv"
         write_dataframe(f_atomic2, dforig)
-        @test_throws ErrorException write_dataframe(f_atomic2, dfnew)
+        @test_throws ArgumentError write_dataframe(f_atomic2, dfnew)
         df_check = read_dataframe(f_atomic2)
         @test df_check.p == dforig.p
 
