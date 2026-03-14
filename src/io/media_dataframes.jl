@@ -272,31 +272,84 @@ function _unescape_mysql_string_values(stmt::String)
 end
 
 """
+    _is_dump_skip_line(line::String) -> Bool
+
+Return `true` for lines in a SQL dump that should be ignored entirely:
+empty lines, SQL comments, and database-specific housekeeping commands.
+"""
+function _is_dump_skip_line(line::AbstractString)
+    return isempty(line) ||
+           startswith(line, "--") ||
+           startswith(line, "/*") ||
+           occursin(r"^(LOCK|UNLOCK|SET)\s", line)
+end
+
+"""
+    _is_create_table_index_line(line::String) -> Bool
+
+Return `true` for lines inside a CREATE TABLE block that define indexes,
+constraints, or foreign keys — all unsupported in the SQLite conversion.
+"""
+function _is_create_table_index_line(line::AbstractString)
+    return occursin(r"^\s*PRIMARY\s+KEY\s*\(", line) ||
+           occursin(r"^\s*KEY\s+", line) ||
+           occursin(r"^\s*UNIQUE\s+(KEY|INDEX)", line) ||
+           occursin(r"^\s*INDEX\s+", line) ||
+           occursin(r"^\s*CONSTRAINT\s+", line) ||
+           occursin(r"^\s*FOREIGN\s+KEY", line)
+end
+
+"""
+    _build_and_execute_create_table!(db, table_name::String, table_columns::Vector{String})
+
+Assemble a SQLite `CREATE TABLE` statement from accumulated column definitions
+and execute it. Warns (without throwing) if SQLite rejects the statement.
+"""
+function _build_and_execute_create_table!(db, table_name::AbstractString, table_columns::Vector{String})
+    isempty(table_columns) && return nothing
+    table_def = "CREATE TABLE $table_name (\n  " * join(table_columns, ",\n  ") * "\n)"
+    try
+        SQLite.execute(db, table_def)
+    catch e
+        @warn "Failed to create table $table_name: $(first(string(e), 100))"
+    end
+    return nothing
+end
+
+"""
+    _execute_insert!(db, line::String)
+
+Strip backticks/double-quotes, unescape MySQL string values, and execute
+an INSERT statement against `db`. Warns on failure without throwing.
+"""
+function _execute_insert!(db, line::AbstractString)
+    stmt = replace(line, r"[`\"]" => "")
+    stmt = _unescape_mysql_string_values(stmt)
+    try
+        SQLite.execute(db, stmt)
+    catch e
+        @warn "Failed to execute INSERT: $e"
+    end
+    return nothing
+end
+
+"""
     _load_sql_dump!(db, path::String, db_type::Symbol)
 
-Internal function to load a SQL dump file into a SQLite database with syntax conversion.
+Load a SQL dump file into a SQLite database, converting syntax on the fly.
+Delegates line classification and type conversion to focused helper functions.
 """
 function _load_sql_dump!(db, path::String, db_type::Symbol)
     in_create_table = false
     table_columns = String[]
     table_name = ""
-    
+
     open(path, "r") do file
-        for line in eachline(file)
-            line = strip(line)
-            
-            # Skip comments, empty lines, and DB-specific commands
-            if isempty(line) || startswith(line, "--") || startswith(line, "/*") ||
-               occursin(r"^(LOCK|UNLOCK|SET)\s", line)
-                continue
-            end
-            
-            # Skip DROP TABLE
-            if occursin(r"^DROP TABLE IF EXISTS", line)
-                continue
-            end
-            
-            # Detect CREATE TABLE start
+        for raw_line in eachline(file)
+            line = strip(raw_line)
+            _is_dump_skip_line(line) && continue
+            occursin(r"^DROP TABLE IF EXISTS", line) && continue
+
             m = match(r"^CREATE TABLE\s+[`\"]?(\w+)[`\"]?", line)
             if m !== nothing
                 in_create_table = true
@@ -304,162 +357,152 @@ function _load_sql_dump!(db, path::String, db_type::Symbol)
                 table_columns = String[]
                 continue
             end
-            
+
             if in_create_table
-                # Remove backticks and quotes
                 line = replace(line, r"[`\"]" => "")
-                
-                # Skip KEY/INDEX/CONSTRAINT definitions
-                if occursin(r"^\s*PRIMARY\s+KEY\s*\(", line) ||
-                   occursin(r"^\s*KEY\s+", line) ||
-                   occursin(r"^\s*UNIQUE\s+(KEY|INDEX)", line) ||
-                   occursin(r"^\s*INDEX\s+", line) ||
-                   occursin(r"^\s*CONSTRAINT\s+", line) ||
-                   occursin(r"^\s*FOREIGN\s+KEY", line)
+                if _is_create_table_index_line(line)
                     continue
-                end
-                
-                # Handle end of CREATE TABLE
-                if occursin(r"^\)", line)
-                    # Build the complete CREATE TABLE statement
-                    if !isempty(table_columns)
-                        table_def = "CREATE TABLE $table_name (\n  " * 
-                                    join(table_columns, ",\n  ") * "\n)"
-                        
-                        try
-                            SQLite.execute(db, table_def)
-                        catch e
-                            @warn "Failed to create table $table_name: $(first(string(e), 100))"
-                        end
-                    end
-                    
+                elseif occursin(r"^\)", line)
+                    _build_and_execute_create_table!(db, table_name, table_columns)
                     in_create_table = false
                     table_columns = String[]
                     table_name = ""
-                    continue
+                else
+                    converted = _convert_column_line(line, db_type)
+                    cleaned = strip(replace(converted, r",\s*$" => ""))
+                    isempty(cleaned) || push!(table_columns, cleaned)
                 end
-                
-                # Convert MySQL/PostgreSQL types to SQLite
-                if db_type == :mysql
-                    line = _convert_mysql_to_sqlite(line)
-                elseif db_type == :postgresql
-                    line = _convert_postgresql_to_sqlite(line)
-                end
-                
-                # Remove trailing comma and add to columns list
-                cleaned = strip(replace(line, r",\s*$" => ""))
-                if !isempty(cleaned)
-                    push!(table_columns, cleaned)
-                end
-                
             elseif occursin(r"^INSERT INTO", line)
-                # Handle INSERT statements
-                stmt = replace(line, r"[`\"]" => "")
-                stmt = _unescape_mysql_string_values(stmt)
-
-                try
-                    SQLite.execute(db, stmt)
-                catch e
-                    @warn "Failed to execute INSERT for table: $e"
-                end
+                _execute_insert!(db, line)
             end
         end
     end
 end
 
 """
-    _convert_mysql_to_sqlite(line::String) -> String
+    _convert_column_line(line::String, db_type::Symbol) -> String
 
-Convert MySQL column definition to SQLite syntax.
+Dispatch a single column-definition line to the appropriate type converter.
 """
-function _convert_mysql_to_sqlite(line::String)
-    # Convert data types (including with size specifications like int(11))
-    line = replace(line, r"\bint\([^)]+\)" => "INTEGER")
-    line = replace(line, r"\btinyint\([^)]+\)" => "INTEGER")
-    line = replace(line, r"\bsmallint\([^)]+\)" => "INTEGER")
+function _convert_column_line(line::AbstractString, db_type::Symbol)
+    db_type == :mysql      && return _convert_mysql_to_sqlite(line)
+    db_type == :postgresql && return _convert_postgresql_to_sqlite(line)
+    return line
+end
+
+"""
+    _convert_mysql_types_to_sqlite(line::String) -> String
+
+Map MySQL data types to their closest SQLite equivalents.
+"""
+function _convert_mysql_types_to_sqlite(line::String)
+    line = replace(line, r"\bint\([^)]+\)"      => "INTEGER")
+    line = replace(line, r"\btinyint\([^)]+\)"   => "INTEGER")
+    line = replace(line, r"\bsmallint\([^)]+\)"  => "INTEGER")
     line = replace(line, r"\bmediumint\([^)]+\)" => "INTEGER")
-    line = replace(line, r"\bbigint\([^)]+\)" => "INTEGER")
-    line = replace(line, r"\bint\b" => "INTEGER")
-    line = replace(line, r"\btinyint\b" => "INTEGER")
-    line = replace(line, r"\bsmallint\b" => "INTEGER")
-    line = replace(line, r"\bmediumint\b" => "INTEGER")
-    line = replace(line, r"\bbigint\b" => "INTEGER")
-    line = replace(line, r"\bdecimal\([^)]+\)" => "REAL")
-    line = replace(line, r"\bnumeric\([^)]+\)" => "REAL")
-    line = replace(line, r"\bdouble\b" => "REAL")
-    line = replace(line, r"\bfloat\b" => "REAL")
-    line = replace(line, r"\bvarchar\([^)]+\)" => "TEXT")
-    line = replace(line, r"\bchar\([^)]+\)" => "TEXT")
-    line = replace(line, r"\btext\b" => "TEXT")
-    line = replace(line, r"\btinytext\b" => "TEXT")
-    line = replace(line, r"\bmediumtext\b" => "TEXT")
-    line = replace(line, r"\blongtext\b" => "TEXT")
-    line = replace(line, r"\bdate\b" => "TEXT")
-    line = replace(line, r"\bdatetime\b" => "TEXT")
-    line = replace(line, r"\btimestamp\b" => "TEXT")
-    
-    # Handle AUTO_INCREMENT (must be PRIMARY KEY AUTOINCREMENT in SQLite)
+    line = replace(line, r"\bbigint\([^)]+\)"    => "INTEGER")
+    line = replace(line, r"\bint\b"              => "INTEGER")
+    line = replace(line, r"\btinyint\b"          => "INTEGER")
+    line = replace(line, r"\bsmallint\b"         => "INTEGER")
+    line = replace(line, r"\bmediumint\b"        => "INTEGER")
+    line = replace(line, r"\bbigint\b"           => "INTEGER")
+    line = replace(line, r"\bdecimal\([^)]+\)"   => "REAL")
+    line = replace(line, r"\bnumeric\([^)]+\)"   => "REAL")
+    line = replace(line, r"\bdouble\b"           => "REAL")
+    line = replace(line, r"\bfloat\b"            => "REAL")
+    line = replace(line, r"\bvarchar\([^)]+\)"   => "TEXT")
+    line = replace(line, r"\bchar\([^)]+\)"      => "TEXT")
+    line = replace(line, r"\btinytext\b"         => "TEXT")
+    line = replace(line, r"\bmediumtext\b"       => "TEXT")
+    line = replace(line, r"\blongtext\b"         => "TEXT")
+    line = replace(line, r"\btext\b"             => "TEXT")
+    line = replace(line, r"\bdatetime\b"         => "TEXT")
+    line = replace(line, r"\btimestamp\b"        => "TEXT")
+    line = replace(line, r"\bdate\b"             => "TEXT")
+    return line
+end
+
+"""
+    _strip_mysql_keywords(line::String) -> String
+
+Remove or replace MySQL column-modifier keywords not supported by SQLite.
+"""
+function _strip_mysql_keywords(line::String)
     if occursin("AUTO_INCREMENT", line)
-        # Remove AUTO_INCREMENT and NOT NULL, will add PRIMARY KEY AUTOINCREMENT
         line = replace(line, r"\s+NOT\s+NULL\s+AUTO_INCREMENT" => " PRIMARY KEY AUTOINCREMENT")
-        line = replace(line, r"\s+AUTO_INCREMENT" => " PRIMARY KEY AUTOINCREMENT")
+        line = replace(line, r"\s+AUTO_INCREMENT"              => " PRIMARY KEY AUTOINCREMENT")
     else
-        # For non-auto-increment columns, remove NOT NULL
         line = replace(line, r"\s+NOT\s+NULL" => "")
     end
-    
-    # Remove MySQL-specific keywords
-    line = replace(line, " UNSIGNED" => "")
-    line = replace(line, r"\s+DEFAULT\s+NULL" => "")
-    line = replace(line, r"\s+COLLATE\s+\w+" => "")
-    line = replace(line, r"\s+CHARACTER\s+SET\s+\w+" => "")
+    line = replace(line, " UNSIGNED"                      => "")
+    line = replace(line, r"\s+DEFAULT\s+NULL"             => "")
+    line = replace(line, r"\s+COLLATE\s+\w+"              => "")
+    line = replace(line, r"\s+CHARACTER\s+SET\s+\w+"      => "")
     line = replace(line, r"\s+ON\s+UPDATE\s+CURRENT_TIMESTAMP" => "")
-    
+    return line
+end
+
+"""
+    _convert_mysql_to_sqlite(line::String) -> String
+
+Convert a MySQL column definition line to SQLite syntax.
+"""
+function _convert_mysql_to_sqlite(line::String)
+    return _strip_mysql_keywords(_convert_mysql_types_to_sqlite(line))
+end
+
+"""
+    _convert_postgresql_types_to_sqlite(line::String) -> String
+
+Map PostgreSQL data types (including serial variants) to their closest SQLite equivalents.
+"""
+function _convert_postgresql_types_to_sqlite(line::String)
+    if occursin(r"\b(big|small)?serial\b"i, line)
+        line = replace(line, r"\bserial\s+PRIMARY\s+KEY\b"      => "INTEGER PRIMARY KEY AUTOINCREMENT")
+        line = replace(line, r"\bbigserial\s+PRIMARY\s+KEY\b"   => "INTEGER PRIMARY KEY AUTOINCREMENT")
+        line = replace(line, r"\bsmallserial\s+PRIMARY\s+KEY\b" => "INTEGER PRIMARY KEY AUTOINCREMENT")
+        line = replace(line, r"\bserial\b"                      => "INTEGER PRIMARY KEY AUTOINCREMENT")
+        line = replace(line, r"\bbigserial\b"                   => "INTEGER PRIMARY KEY AUTOINCREMENT")
+        line = replace(line, r"\bsmallserial\b"                 => "INTEGER PRIMARY KEY AUTOINCREMENT")
+    end
+    line = replace(line, r"\binteger\b"                  => "INTEGER")
+    line = replace(line, r"\bbigint\b"                   => "INTEGER")
+    line = replace(line, r"\bsmallint\b"                 => "INTEGER")
+    line = replace(line, r"\bnumeric\([^)]+\)"           => "REAL")
+    line = replace(line, r"\bdecimal\([^)]+\)"           => "REAL")
+    line = replace(line, r"\breal\b"                     => "REAL")
+    line = replace(line, r"\bdouble\s+precision\b"       => "REAL")
+    line = replace(line, r"\bcharacter\s+varying\([^)]+\)" => "TEXT")
+    line = replace(line, r"\bvarchar\([^)]+\)"           => "TEXT")
+    line = replace(line, r"\bchar\([^)]+\)"              => "TEXT")
+    line = replace(line, r"\btext\b"                     => "TEXT")
+    line = replace(line, r"\btimestamp\b"                => "TEXT")
+    line = replace(line, r"\bdate\b"                     => "TEXT")
+    line = replace(line, r"\bboolean\b"                  => "INTEGER")
+    line = replace(line, r"\bjsonb?\b"                   => "TEXT")
+    line = replace(line, r"\buuid\b"                     => "TEXT")
+    return line
+end
+
+"""
+    _strip_postgresql_keywords(line::String) -> String
+
+Remove PostgreSQL column-modifier keywords not supported by SQLite.
+"""
+function _strip_postgresql_keywords(line::String)
+    line = replace(line, r"\s+NOT\s+NULL"                    => "")
+    line = replace(line, r"\s+DEFAULT\s+NULL"                => "")
+    line = replace(line, r"\s+DEFAULT\s+nextval\([^)]+\)"   => "")
     return line
 end
 
 """
     _convert_postgresql_to_sqlite(line::String) -> String
 
-Convert PostgreSQL column definition to SQLite syntax.
+Convert a PostgreSQL column definition line to SQLite syntax.
 """
 function _convert_postgresql_to_sqlite(line::String)
-    # Handle serial types - they include auto-increment and primary key functionality
-    # Remove any explicit PRIMARY KEY since serial already implies it
-    if occursin(r"\b(big)?serial\b", line)
-        line = replace(line, r"\bserial\s+PRIMARY\s+KEY" => "INTEGER PRIMARY KEY AUTOINCREMENT")
-        line = replace(line, r"\bbigserial\s+PRIMARY\s+KEY" => "INTEGER PRIMARY KEY AUTOINCREMENT")
-        line = replace(line, r"\bsmallserial\s+PRIMARY\s+KEY" => "INTEGER PRIMARY KEY AUTOINCREMENT")
-        line = replace(line, r"\bserial\b" => "INTEGER PRIMARY KEY AUTOINCREMENT")
-        line = replace(line, r"\bbigserial\b" => "INTEGER PRIMARY KEY AUTOINCREMENT")
-        line = replace(line, r"\bsmallserial\b" => "INTEGER PRIMARY KEY AUTOINCREMENT")
-    end
-    
-    # Convert other PostgreSQL data types to SQLite
-    line = replace(line, r"\binteger\b" => "INTEGER")
-    line = replace(line, r"\bbigint\b" => "INTEGER")
-    line = replace(line, r"\bsmallint\b" => "INTEGER")
-    line = replace(line, r"\bnumeric\([^)]+\)" => "REAL")
-    line = replace(line, r"\bdecimal\([^)]+\)" => "REAL")
-    line = replace(line, r"\breal\b" => "REAL")
-    line = replace(line, r"\bdouble\s+precision\b" => "REAL")
-    line = replace(line, r"\bcharacter\s+varying\([^)]+\)" => "TEXT")
-    line = replace(line, r"\bvarchar\([^)]+\)" => "TEXT")
-    line = replace(line, r"\bchar\([^)]+\)" => "TEXT")
-    line = replace(line, r"\btext\b" => "TEXT")
-    line = replace(line, r"\btimestamp\b" => "TEXT")
-    line = replace(line, r"\bdate\b" => "TEXT")
-    line = replace(line, r"\bboolean\b" => "INTEGER")
-    line = replace(line, r"\bjson\b" => "TEXT")
-    line = replace(line, r"\bjsonb\b" => "TEXT")
-    line = replace(line, r"\buuid\b" => "TEXT")
-    
-    # Remove PostgreSQL-specific keywords
-    line = replace(line, r"\s+NOT\s+NULL" => "")
-    line = replace(line, r"\s+DEFAULT\s+NULL" => "")
-    line = replace(line, r"\s+DEFAULT\s+nextval\([^)]+\)" => "")
-    
-    return line
+    return _strip_postgresql_keywords(_convert_postgresql_types_to_sqlite(line))
 end
 
 """
