@@ -15,8 +15,8 @@ makedocs(
         "Home" => "index.md",
         "API" => "api.md",
     ],
-    format = Documenter.HTML(),
-    repo = "https://github.com/lemahdi/MyJuliaToolbox.jl",
+    format = Documenter.HTML(repolink="https://github.com/lemahdi/MyJuliaToolbox.jl"),
+    repo = Documenter.Remotes.GitHub("lemahdi", "MyJuliaToolbox.jl"),
 )
 
 println("Documentation build finished. Output in docs/build/index.html or docs/build/latest/index.html.")
