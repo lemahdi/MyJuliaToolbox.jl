@@ -411,13 +411,31 @@ function _pack_dir_to_zip(source_dir::String, zip_path::String)
     end
 end
 
+function _zip_strip_prefix(files)
+    # If every entry shares the same top-level directory, return it (with trailing slash).
+    # Many zip tools wrap everything in a root folder; strip it so extraction lands flat.
+    isempty(files) && return ""
+    first_parts = split(replace(files[1].name, '\\' => '/'), '/')
+    length(first_parts) < 2 && return ""
+    root = first_parts[1]
+    for f in files
+        parts = split(replace(f.name, '\\' => '/'), '/')
+        (length(parts) < 2 || parts[1] != root) && return ""
+    end
+    return root * "/"
+end
+
 function _unpack_zip_to_dir(zip_path::String, dest_dir::String)
     r = ZipFile.Reader(zip_path)
     try
+        prefix = _zip_strip_prefix(r.files)
         buf = Vector{UInt8}(undef, 2 * 1024 * 1024)   # 2 MB scratch buffer
         for f in r.files
-            endswith(f.name, '/') && continue   # directory entry
-            dest_path = joinpath(dest_dir, f.name)
+            norm_name = replace(f.name, '\\' => '/')
+            endswith(norm_name, '/') && continue   # directory entry
+            rel_name = isempty(prefix) ? norm_name : (startswith(norm_name, prefix) ? norm_name[length(prefix)+1:end] : norm_name)
+            isempty(rel_name) && continue
+            dest_path = joinpath(dest_dir, rel_name)
             mkpath(dirname(dest_path))
             open(dest_path, "w") do out
                 while !eof(f)
