@@ -55,6 +55,33 @@ The Media interface supports:
 - **DatabaseMedia**: Database backend for read/query workflows and sink-style writes
 - **ConsoleMedia**: Stream backend for write-oriented workflows (e.g. logging)
 - **SQLDumpMedia**: Read-only SQL dump backend for table/query extraction
+- **ArchiveMedia**: Archive backend for reading and writing datasets as `.zip` or `.tar.gz` files
+
+### Dataset I/O with archives
+
+Use `ArchiveMedia` to read and write datasets packed into `.zip` or `.tar.gz` archives.
+The format is inferred from the file extension automatically.
+
+```julia
+using MyJuliaToolbox
+using MyJuliaToolbox.IO: ArchiveMedia
+
+# Write dataset to a zip archive (atomic by default)
+write_dataset(ArchiveMedia("output.zip"), dataset)
+
+# Write to tar.gz
+write_dataset(ArchiveMedia("output.tar.gz"), dataset)
+
+# Read back — type is resolved automatically from data_info.json
+dataset = read_dataset(ArchiveMedia("output.zip"))
+
+# Or pass the path directly; archive is detected from the extension
+dataset = read_dataset("output.zip")
+dataset = read_dataset("output.tar.gz")
+
+# Typed read
+dataset = read_dataset(MyDataSet, "output.zip")
+```
 
 ### Comparing DataFrames
 

@@ -10,7 +10,7 @@
 **MyJuliaToolbox** is a personal Julia utility package (version `1.0.0-DEV`) providing:
 
 - **Media-agnostic I/O** — read/write DataFrames from/to files, SQLite databases, SQL dumps, and console streams through a uniform interface
-- **Dataset management** — serialize/deserialize typed dataset structs (collections of DataFrames + metadata) to Arrow or CSV directories
+- **Dataset management** — serialize/deserialize typed dataset structs (collections of DataFrames + metadata) to Arrow or CSV directories, or directly into `.zip` / `.tar.gz` archives
 - **Parameter management** — load and save structured configuration objects from/to JSON, including nested structs and URL-based configs
 - **Asynchronous logging** — non-blocking ring-buffer logger with pluggable sinks
 - **Date utilities** — integer-date conversions, year fractions, and business-day adjustment conventions
@@ -78,9 +78,11 @@ abstract type iParameters end    # Base for all parameter configurations
 | `DatabaseMedia` | `DatabaseMedia(locator; db_type=:sqlite, parameters_locator=nothing)` | SQLite databases (path, URL, or pre-opened connection) |
 | `SQLDumpMedia` | `SQLDumpMedia(path; db_type=:mysql, in_memory=true, parameters_locator=nothing)` | SQL dump files auto-converted to in-memory SQLite |
 | `ConsoleMedia` | `ConsoleMedia(; stream=stdout)` | Console/stream output |
+| `ArchiveMedia` | `ArchiveMedia(path; format=:auto)` | `.zip` / `.tar.gz` archives for dataset read/write |
 
 `format` on `FileSystemMedia` can be `:auto` (inferred from extension), `:csv`, or `:arrow`.
 `db_type` on `DatabaseMedia`/`SQLDumpMedia` supports `:sqlite`, `:mysql`, `:postgresql`.
+`format` on `ArchiveMedia` can be `:zip` or `:tar_gz`; auto-detected from `.zip`, `.tar.gz`, `.tgz` extensions. `.rar` and other formats are not supported.
 
 ---
 
@@ -149,13 +151,17 @@ Datasets are directories containing one Arrow (or CSV) file per `DataFrame` fiel
 
 ```julia
 # Untyped read — returns LoadedDataSet; auto-resolves type from data_info.json if present
-read_dataset(path::AbstractString; type=:arrow) -> iDataSet
+read_dataset(path::AbstractString; type=:arrow) -> iDataSet        # path can be a dir, .zip, or .tar.gz
 read_dataset(media::FileSystemMedia; type=:arrow) -> iDataSet
+read_dataset(media::ArchiveMedia; type=:arrow) -> iDataSet
 
 # Typed read — reconstructs a concrete iDataSet subtype explicitly
 read_dataset(::Type{T}, path::AbstractString; type=:arrow) -> T where T<:iDataSet
 read_dataset(::Type{T}, media::FileSystemMedia; type=:arrow) -> T where T<:iDataSet
+read_dataset(::Type{T}, media::ArchiveMedia; type=:arrow) -> T where T<:iDataSet
 ```
+
+`read_dataset(path)` auto-routes to `ArchiveMedia` when `path` ends in `.zip`, `.tar.gz`, or `.tgz`; otherwise uses `FileSystemMedia`.
 
 For the typed read to work, the concrete type `T` must be loaded in the current Julia session (i.e., `using YourModule` that defines it).
 
@@ -167,7 +173,9 @@ write_dataset(media::iSourceMedia, dataset::iDataSet;
 ```
 
 Writes each `DataFrame` field as `<fieldname>.arrow` (or `.csv`), serializes all other fields into `data.json`, and saves each `iParameters` field to `parameters/params_N.json`.
-Supported sinks: `FileSystemMedia`, `ConsoleMedia`.
+Supported sinks: `FileSystemMedia`, `ConsoleMedia`, `ArchiveMedia`.
+
+For `ArchiveMedia`: the dataset is first written to a temp directory, then packed into the archive. `atomic=true` (default) uses a `.tmp` file then renames to prevent partial archives.
 
 ---
 
@@ -267,8 +275,9 @@ add_days_convention(d::Date, delta::Integer;
 2. **Factory dispatch** — `read_dataframe` and `write_dataframe` accept paths, IO objects, DataFrames, Tables.jl sources, or media objects through Julia multiple dispatch.
 3. **Type-driven reconstruction** — `read_dataset` and `read_parameters` use `fieldnames`/`fieldtype` to reconstruct concrete structs from JSON/Arrow without hand-written parsers.
 4. **Structured metadata** — `data_info.json` embeds `dataset_type`; `data.json` embeds `__kind__` markers for parameter references, enabling polymorphic round-trips.
-5. **Atomic writes** — DataFrame and parameter writes use a temp-file-then-rename pattern by default.
+5. **Atomic writes** — DataFrame, parameter, and archive writes use a temp-file-then-rename pattern by default.
 6. **Ring-buffer async logging** — the logger never blocks the caller; records are dropped (and counted via `dropped_logs`) when the buffer is full.
+7. **Archive transparency** — `ArchiveMedia` is a thin wrapper: it extracts to a temp dir, delegates to `FileSystemMedia` logic, then repacks. All dataset features (typed reads, `iParameters` refs, `data_info.json`) work identically inside archives.
 
 ---
 
@@ -278,6 +287,8 @@ add_days_convention(d::Date, delta::Integer;
 - For the typed `read_dataset(T, ...)` to work, `T` must be visible in `Main` or the calling module. Load the package that defines the type before calling `read_dataset`.
 - `parameters_from_dict` is strict: it throws `ArgumentError` on unexpected keys and on missing required keys. JSON field names must exactly match Julia field names.
 - `SQLDumpMedia` loads the entire dump into an in-memory SQLite database at construction time, which may be slow for large dumps.
+- `ArchiveMedia` extracts to a `mktempdir()` on every read; for large archives this involves full decompression. Keep datasets reasonably sized or prefer `FileSystemMedia` for hot paths.
+- On Windows, Arrow memory-maps files. `_with_archive_extracted` calls `GC.gc()` before cleanup and silently ignores `ENOTEMPTY`; the OS reclaims the temp dir once all handles close.
 
 ---
 
@@ -310,7 +321,7 @@ Two global rules do **not** apply when working on this package itself:
 |---------|---------|
 | `Arrow` 2.8+ | Columnar serialization for DataFrames |
 | `CSV` 0.10+ | CSV parsing and writing |
-| `CodecZlib` | Gzip decompression for `.csv.gz` files |
+| `CodecZlib` | Gzip compression/decompression (`.csv.gz` and `.tar.gz` archives) |
 | `DataFrames` 1.8+ | Core tabular data structure |
 | `DataFramesMeta` 0.15+ | Macro helpers (`@chain`, `@transform`, etc.) |
 | `JSON` 1.3+ | Parameter and metadata serialization |
@@ -319,6 +330,8 @@ Two global rules do **not** apply when working on this package itself:
 | `Pipe` | Pipe operator (`|>` chains) |
 | `Plots` + `StatsPlots` | Visualization — hard dependencies; used in sandbox scripts. Consider moving to a package extension if install weight becomes a concern. |
 | `Tables` | Tables.jl interface compatibility |
+| `Tar` (stdlib) | `.tar.gz` archive creation and extraction |
+| `ZipFile` 0.10+ | `.zip` archive creation and extraction |
 
 ---
 
@@ -344,6 +357,32 @@ using MyJuliaToolbox: write_dataset
 using MyJuliaToolbox.IO: FileSystemMedia
 
 write_dataset(FileSystemMedia("path/to/output"), dataset; overwrite=true)
+```
+
+### Write and read a dataset from an archive
+
+```julia
+using MyJuliaToolbox: read_dataset, write_dataset
+using MyJuliaToolbox.IO: ArchiveMedia
+
+# Write to .zip (atomic by default — writes .zip.tmp then renames)
+write_dataset(ArchiveMedia("output.zip"), dataset)
+
+# Write to .tar.gz
+write_dataset(ArchiveMedia("output.tar.gz"), dataset)
+
+# Read back — untyped (auto-resolves type from data_info.json)
+dataset = read_dataset(ArchiveMedia("output.zip"))
+
+# Read back — typed
+dataset = read_dataset(MyDataSet, ArchiveMedia("output.zip"))
+
+# Convenience: pass the path directly (auto-detects archive from extension)
+dataset = read_dataset("output.zip")
+dataset = read_dataset(MyDataSet, "output.tar.gz")
+
+# Overwrite an existing archive
+write_dataset(ArchiveMedia("output.zip"), new_dataset; overwrite=true)
 ```
 
 ### Load parameters from JSON
@@ -392,4 +431,4 @@ df = read_dataframe(db; query="SELECT * FROM menages WHERE region_id = 3")
 
 ---
 
-*Last updated: 2026-03-14 (review pass: sandbox structure, Plots dep note, test instructions, global rule overrides)*
+*Last updated: 2026-03-18 (added ArchiveMedia: .zip and .tar.gz dataset read/write, ZipFile/Tar deps, Windows cleanup notes)*
