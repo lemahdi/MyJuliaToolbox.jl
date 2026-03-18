@@ -16,7 +16,7 @@ const _DATASET_INFO_FILE = "data_info.json"
 # Avoids repeated Meta.parse + module traversal on every read_dataset call.
 const _DATASET_TYPE_CACHE = Dict{String, Type}()
 
-export iDataSet, LoadedDataSet, write_dataset, read_dataset
+export iDataSet, LoadedDataSet, write_dataset, read_dataset, nonpersisted_fields
 
 """
     abstract type iDataSet
@@ -40,6 +40,27 @@ end
 ```
 """
 abstract type iDataSet end
+
+"""
+    nonpersisted_fields(::Type{T}) -> Tuple{Vararg{Symbol}}
+
+Return the field names of `T` that `write_dataset` should skip and `read_dataset`
+should tolerate as absent (defaulting to a sensible zero value).
+
+Override this for any concrete `iDataSet` subtype that has optional or
+intentionally-omitted fields:
+
+```julia
+nonpersisted_fields(::Type{RSUDataSet}) = (:stepwise_scores_df,)
+```
+
+**Automatic defaults by field type**
+- `DataFrame` → `DataFrame()`
+- `Union{Nothing, T}` → `nothing`
+
+Any other type requires the field to actually be present on disk.
+"""
+nonpersisted_fields(::Type{<:iDataSet}) = ()
 
 """
     LoadedDataSet(attributes::Dict{Symbol,Any})
@@ -82,7 +103,9 @@ function _write_dataset_impl(source::IO.FileSystemMedia, dataset::iDataSet; type
 
     payload = Dict{String,Any}()
     parameter_counter = Ref(0)
+    np_fields = Set(nonpersisted_fields(typeof(dataset)))
     for field_name in fieldnames(typeof(dataset))
+        field_name in np_fields && continue
         value = getfield(dataset, field_name)
         field_t = fieldtype(typeof(dataset), field_name)
         if value isa DataFrame
@@ -390,11 +413,17 @@ end
 function _unpack_zip_to_dir(zip_path::String, dest_dir::String)
     r = ZipFile.Reader(zip_path)
     try
+        buf = Vector{UInt8}(undef, 2 * 1024 * 1024)   # 2 MB scratch buffer
         for f in r.files
             endswith(f.name, '/') && continue   # directory entry
             dest_path = joinpath(dest_dir, f.name)
             mkpath(dirname(dest_path))
-            write(dest_path, read(f))
+            open(dest_path, "w") do out
+                while !eof(f)
+                    n = readbytes!(f, buf)
+                    write(out, @view buf[1:n])
+                end
+            end
         end
     finally
         close(r)
@@ -585,6 +614,7 @@ end
 function _dataset_from_attributes(::Type{T}, attributes::Dict{Symbol,Any}, source::Union{IO.iSourceMedia,Nothing}=nothing) where {T <: iDataSet}
     expected_fields = fieldnames(T)
     expected_set = Set(expected_fields)
+    np_fields = Set(nonpersisted_fields(T))
 
     for key in keys(attributes)
         if !(key in expected_set)
@@ -597,6 +627,8 @@ function _dataset_from_attributes(::Type{T}, attributes::Dict{Symbol,Any}, sourc
         field_type = fieldtype(T, field_name)
         if haskey(attributes, field_name)
             push!(values, _dataset_convert_value(field_type, attributes[field_name], source))
+        elseif field_name in np_fields
+            push!(values, _nonpersisted_default(field_type, field_name, T))
         else
             found, loaded = isnothing(source) ? (false, nothing) : _try_load_parameters_field(field_type, field_name, source)
             if found
@@ -608,6 +640,15 @@ function _dataset_from_attributes(::Type{T}, attributes::Dict{Symbol,Any}, sourc
     end
 
     return T(values...)
+end
+
+function _nonpersisted_default(::Type{T}, field_name::Symbol, dataset_type::Type) where {T}
+    T <: DataFrame && return DataFrame()
+    Nothing <: T  && return nothing
+    throw(ArgumentError(
+        "Non-persisted field '$field_name' of type $T in $(dataset_type) has no automatic default. " *
+        "Only DataFrame and Union{Nothing,…} fields are defaulted automatically."
+    ))
 end
 
 function _dataset_convert_value(::Type{Any}, value, source::Union{IO.iSourceMedia,Nothing}=nothing)

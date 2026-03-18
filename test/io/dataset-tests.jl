@@ -243,6 +243,53 @@ using JSON
         @testset "ArchiveMedia read missing file" begin
             @test_throws ArgumentError read_dataset(ArchiveMedia("nonexistent.zip"))
         end
+
+        @testset "nonpersisted_fields — absent field defaults on FileSystemMedia" begin
+            struct DataSetWithNP <: iDataSet
+                users::DataFrame
+                cache::DataFrame        # non-persisted
+                name::String
+                opt::Union{Nothing,String}  # non-persisted
+            end
+            MyJuliaToolbox.nonpersisted_fields(::Type{DataSetWithNP}) = (:cache, :opt)
+
+            np_dir = joinpath(temp_dir, "nonpersisted")
+            source = FileSystemMedia(np_dir)
+            ds_np = DataSetWithNP(users_df, DataFrame(x=[1,2]), "np-test", "hello")
+
+            write_dataset(source, ds_np; overwrite=true)
+
+            # non-persisted fields must be absent from disk
+            @test !isfile(joinpath(np_dir, "cache.arrow"))
+            @test !haskey(JSON.parsefile(joinpath(np_dir, "data.json")), "opt")
+
+            # read back: non-persisted fields get automatic defaults
+            loaded = read_dataset(DataSetWithNP, source)
+            @test loaded isa DataSetWithNP
+            @test nrow(loaded.cache) == 0        # DataFrame()
+            @test loaded.opt === nothing          # Union{Nothing,...}
+            @test loaded.name == "np-test"
+            @test nrow(loaded.users) == 2
+        end
+
+        @testset "nonpersisted_fields — absent field defaults on ArchiveMedia (.zip)" begin
+            struct DataSetWithNPZip <: iDataSet
+                orders::DataFrame
+                scratch::DataFrame   # non-persisted
+                label::String
+            end
+            MyJuliaToolbox.nonpersisted_fields(::Type{DataSetWithNPZip}) = (:scratch,)
+
+            zip_np_path = joinpath(temp_dir, "np-dataset.zip")
+            source = ArchiveMedia(zip_np_path)
+            ds_npz = DataSetWithNPZip(orders_df, DataFrame(tmp=[99]), "zipped")
+
+            write_dataset(source, ds_npz)
+            loaded = read_dataset(DataSetWithNPZip, source)
+            @test loaded isa DataSetWithNPZip
+            @test nrow(loaded.scratch) == 0
+            @test loaded.label == "zipped"
+        end
     finally
         try
             rm(temp_dir, recursive=true, force=true)
