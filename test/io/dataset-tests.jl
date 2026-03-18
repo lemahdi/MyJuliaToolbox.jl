@@ -120,7 +120,8 @@ using JSON
             params_ref = data_json["parameters"]
             @test params_ref["__kind__"] == "mjt_iParameters_ref"
             @test params_ref["relative_path"] == "parameters"
-            @test isfile(joinpath(params_dir, "parameters", params_ref["file"]))
+            @test params_ref["file"] == "parameters.json"
+            @test isfile(joinpath(params_dir, "parameters", "parameters.json"))
 
             loaded_untyped = read_dataset(source)
             @test loaded_untyped isa DataSetWithParams

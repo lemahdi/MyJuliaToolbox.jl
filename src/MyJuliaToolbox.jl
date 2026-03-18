@@ -13,8 +13,8 @@ Primary exported helpers (re-exported from `MyJuliaToolbox.IO`):
 # Include submodules
 include("io.jl")
 include("utils.jl")
-include("dataset.jl")
 include("parameters.jl")
+include("dataset.jl")
 
 # Re-export commonly-used IO helpers at top level for convenience
 using .IO: read_dataframe, write_dataframe, read_csv_to_df, read_arrow_to_df

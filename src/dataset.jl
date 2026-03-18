@@ -84,9 +84,20 @@ function _write_dataset_impl(source::IO.FileSystemMedia, dataset::iDataSet; type
     parameter_counter = Ref(0)
     for field_name in fieldnames(typeof(dataset))
         value = getfield(dataset, field_name)
+        field_t = fieldtype(typeof(dataset), field_name)
         if value isa DataFrame
             file_name = "$(field_name).$(ext)"
             IO.write_dataframe(source, file_name, value; format=type, overwrite=overwrite, atomic=atomic)
+        elseif value isa iParameters
+            write_parameters(source, "$(field_name).json", value, _DATASET_PARAMETERS_DIR; overwrite=overwrite, pretty=pretty)
+            if _parameters_field_needs_type_ref(field_t)
+                payload[string(field_name)] = Dict(
+                    "__kind__" => _DATASET_PARAMETER_REF_KIND,
+                    "type" => string(typeof(value)),
+                    "file" => "$(field_name).json",
+                    "relative_path" => _DATASET_PARAMETERS_DIR,
+                )
+            end
         else
             payload[string(field_name)] = _dataset_to_json_value(value, source, parameter_counter; overwrite=overwrite, pretty=pretty)
         end
@@ -551,6 +562,26 @@ function _dataset_resolve_type_expr(expr::Expr)
     return getfield(left, right_symbol)
 end
 
+function _try_load_parameters_field(::Type{T}, field_name::Symbol, source::IO.FileSystemMedia) where {T <: iParameters}
+    file = "$(field_name).json"
+    params_path = joinpath(source.path, _DATASET_PARAMETERS_DIR, file)
+    isfile(params_path) || return (false, nothing)
+    Base.isconcretetype(T) || throw(ArgumentError("Cannot deserialize abstract iParameters field type $(T) for field '$field_name'. Use a concrete subtype."))
+    return (true, read_parameters(T, source, file, _DATASET_PARAMETERS_DIR))
+end
+
+function _try_load_parameters_field(::Type{Union{Nothing, S}}, field_name::Symbol, source::IO.FileSystemMedia) where {S <: iParameters}
+    file = "$(field_name).json"
+    params_path = joinpath(source.path, _DATASET_PARAMETERS_DIR, file)
+    !isfile(params_path) && return (true, nothing)
+    Base.isconcretetype(S) || throw(ArgumentError("Cannot deserialize abstract iParameters field type $(S) for field '$field_name'. Use a concrete subtype."))
+    return (true, read_parameters(S, source, file, _DATASET_PARAMETERS_DIR))
+end
+
+function _try_load_parameters_field(::Type{T}, field_name::Symbol, source) where {T}
+    return (false, nothing)
+end
+
 function _dataset_from_attributes(::Type{T}, attributes::Dict{Symbol,Any}, source::Union{IO.iSourceMedia,Nothing}=nothing) where {T <: iDataSet}
     expected_fields = fieldnames(T)
     expected_set = Set(expected_fields)
@@ -563,11 +594,17 @@ function _dataset_from_attributes(::Type{T}, attributes::Dict{Symbol,Any}, sourc
 
     values = Any[]
     for field_name in expected_fields
-        if !haskey(attributes, field_name)
-            throw(ArgumentError("Missing attribute '$field_name' for dataset type $(T)."))
-        end
         field_type = fieldtype(T, field_name)
-        push!(values, _dataset_convert_value(field_type, attributes[field_name], source))
+        if haskey(attributes, field_name)
+            push!(values, _dataset_convert_value(field_type, attributes[field_name], source))
+        else
+            found, loaded = isnothing(source) ? (false, nothing) : _try_load_parameters_field(field_type, field_name, source)
+            if found
+                push!(values, loaded)
+            else
+                throw(ArgumentError("Missing attribute '$field_name' for dataset type $(T)."))
+            end
+        end
     end
 
     return T(values...)
@@ -643,6 +680,18 @@ end
 
 function _dataset_convert_value(::Type{Union{Nothing, S}}, value, source::Union{IO.iSourceMedia,Nothing}=nothing) where {S}
     return value === nothing ? nothing : _dataset_convert_value(S, value, source)
+end
+
+function _parameters_field_needs_type_ref(::Type{T}) where {T <: iParameters}
+    return !Base.isconcretetype(T)
+end
+
+function _parameters_field_needs_type_ref(::Type{Union{Nothing, S}}) where {S <: iParameters}
+    return !Base.isconcretetype(S)
+end
+
+function _parameters_field_needs_type_ref(::Type{T}) where {T}
+    return false
 end
 
 function _dataset_convert_key(::Type{String}, key)
