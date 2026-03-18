@@ -3,6 +3,9 @@
 
 using DataFrames
 using JSON
+using ZipFile
+using Tar
+using CodecZlib
 
 const _DATASET_PARAMETER_REF_KIND = "mjt_iParameters_ref"
 const _DATASET_PARAMETERS_DIR = "parameters"
@@ -158,6 +161,7 @@ function read_dataset(source::IO.iSourceMedia; type::Symbol=:arrow)
 end
 
 function read_dataset(path::AbstractString; type::Symbol=:arrow)
+    _is_archive_path(path) && return read_dataset(IO.ArchiveMedia(path); type=type)
     return read_dataset(IO.FileSystemMedia(path); type=type)
 end
 
@@ -167,6 +171,7 @@ function read_dataset(::Type{T}, source::IO.iSourceMedia; type::Symbol=:arrow) w
 end
 
 function read_dataset(::Type{T}, path::AbstractString; type::Symbol=:arrow) where {T <: iDataSet}
+    _is_archive_path(path) && return read_dataset(T, IO.ArchiveMedia(path); type=type)
     return read_dataset(T, IO.FileSystemMedia(path); type=type)
 end
 
@@ -244,6 +249,167 @@ end
 
 function _read_dataset_impl(source::IO.iSourceMedia; type::Symbol=:arrow)
     throw(ArgumentError("read_dataset is only implemented for FileSystemMedia. Received: $(typeof(source))"))
+end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ArchiveMedia support
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    read_dataset(source::IO.ArchiveMedia; type::Symbol=:arrow)
+
+Extract the archive at `source.path` to a temporary directory, read the dataset
+from it, then clean up. Supports `:zip` and `:tar_gz` formats.
+"""
+function read_dataset(source::IO.ArchiveMedia; type::Symbol=:arrow)
+    isfile(source.path) || throw(ArgumentError("Archive file not found: $(source.path)"))
+    _with_archive_extracted(source) do tmp_media
+        read_dataset(tmp_media; type=type)
+    end
+end
+
+"""
+    read_dataset(::Type{T}, source::IO.ArchiveMedia; type::Symbol=:arrow)
+
+Typed variant of archive read. Reconstructs a concrete `T <: iDataSet` from the archive.
+"""
+function read_dataset(::Type{T}, source::IO.ArchiveMedia; type::Symbol=:arrow) where {T <: iDataSet}
+    isfile(source.path) || throw(ArgumentError("Archive file not found: $(source.path)"))
+    _with_archive_extracted(source) do tmp_media
+        read_dataset(T, tmp_media; type=type)
+    end
+end
+
+"""
+    _write_dataset_impl(source::IO.ArchiveMedia, dataset::iDataSet; kwargs...)
+
+Write `dataset` into a temporary directory, then pack it into the archive at
+`source.path`. Supports `:zip` and `:tar_gz` formats.
+"""
+function _write_dataset_impl(source::IO.ArchiveMedia, dataset::iDataSet; type::Symbol=:arrow, overwrite::Bool=false, atomic::Bool=true, pretty::Bool=true)
+    if isfile(source.path) && !overwrite
+        throw(ArgumentError("Archive already exists: $(source.path). Pass overwrite=true to overwrite."))
+    end
+
+    tmp_dir = mktempdir()
+    try
+        tmp_media = IO.FileSystemMedia(tmp_dir)
+        _write_dataset_impl(tmp_media, dataset; type=type, overwrite=true, atomic=false, pretty=pretty)
+
+        if atomic
+            tmp_archive = source.path * ".tmp"
+            try
+                _pack_dir_to_archive(tmp_dir, tmp_archive, source.format)
+                mv(tmp_archive, source.path; force=true)
+            catch
+                isfile(tmp_archive) && rm(tmp_archive; force=true)
+                rethrow()
+            end
+        else
+            _pack_dir_to_archive(tmp_dir, source.path, source.format)
+        end
+    finally
+        rm(tmp_dir; recursive=true, force=true)
+    end
+
+    return nothing
+end
+
+function _is_archive_path(path::AbstractString)
+    lp = lowercase(path)
+    return endswith(lp, ".zip") || endswith(lp, ".tar.gz") || endswith(lp, ".tgz")
+end
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+function _with_archive_extracted(f::Function, source::IO.ArchiveMedia)
+    tmp_dir = mktempdir()
+    try
+        _unpack_archive_to_dir(source.path, tmp_dir, source.format)
+        return f(IO.FileSystemMedia(tmp_dir))
+    finally
+        GC.gc()   # flush Arrow memory-mapped handles before cleanup
+        try
+            rm(tmp_dir; recursive=true, force=true)
+        catch e
+            e isa Base.IOError || rethrow()
+            # Windows keeps file handles open on memory-mapped Arrow files even after GC.
+            # Silently ignore ENOTEMPTY; the OS will purge the temp dir when handles close.
+        end
+    end
+end
+
+function _pack_dir_to_archive(source_dir::String, archive_path::String, format::Symbol)
+    if format == :zip
+        _pack_dir_to_zip(source_dir, archive_path)
+    elseif format == :tar_gz
+        _pack_dir_to_tar_gz(source_dir, archive_path)
+    else
+        throw(ArgumentError("Unsupported archive format: $format. Supported: :zip, :tar_gz"))
+    end
+end
+
+function _unpack_archive_to_dir(archive_path::String, dest_dir::String, format::Symbol)
+    if format == :zip
+        _unpack_zip_to_dir(archive_path, dest_dir)
+    elseif format == :tar_gz
+        _unpack_tar_gz_to_dir(archive_path, dest_dir)
+    else
+        throw(ArgumentError("Unsupported archive format: $format. Supported: :zip, :tar_gz"))
+    end
+end
+
+function _pack_dir_to_zip(source_dir::String, zip_path::String)
+    w = ZipFile.Writer(zip_path)
+    try
+        for (root, _, files) in walkdir(source_dir)
+            for file_name in files
+                full_path = joinpath(root, file_name)
+                rel_path  = relpath(full_path, source_dir)
+                entry_name = replace(rel_path, '\\' => '/')
+                f = ZipFile.addfile(w, entry_name; method=ZipFile.Deflate)
+                write(f, read(full_path))
+            end
+        end
+    finally
+        close(w)
+    end
+end
+
+function _unpack_zip_to_dir(zip_path::String, dest_dir::String)
+    r = ZipFile.Reader(zip_path)
+    try
+        for f in r.files
+            endswith(f.name, '/') && continue   # directory entry
+            dest_path = joinpath(dest_dir, f.name)
+            mkpath(dirname(dest_path))
+            write(dest_path, read(f))
+        end
+    finally
+        close(r)
+    end
+end
+
+function _pack_dir_to_tar_gz(source_dir::String, tar_gz_path::String)
+    open(tar_gz_path, "w") do file_io
+        gz_io = GzipCompressorStream(file_io)
+        try
+            Tar.create(source_dir, gz_io)
+        finally
+            close(gz_io)
+        end
+    end
+end
+
+function _unpack_tar_gz_to_dir(tar_gz_path::String, dest_dir::String)
+    open(tar_gz_path, "r") do file_io
+        gz_io = GzipDecompressorStream(file_io)
+        try
+            Tar.extract(gz_io, dest_dir)
+        finally
+            close(gz_io)
+        end
+    end
 end
 
 function _dataset_to_json_value(value)

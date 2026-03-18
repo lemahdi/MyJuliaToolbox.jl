@@ -4,7 +4,7 @@
 using DataFrames
 using SQLite
 
-export iSourceMedia, FileSystemMedia, DatabaseMedia, SQLDumpMedia, ConsoleMedia
+export iSourceMedia, FileSystemMedia, DatabaseMedia, SQLDumpMedia, ConsoleMedia, ArchiveMedia
 
 # SQLite reserved keywords that must not be used as bare (unquoted) identifiers.
 # Source: https://www.sqlite.org/lang_keywords.html
@@ -226,3 +226,52 @@ struct ConsoleMedia <: iSourceMedia
 end
 
 ConsoleMedia(; stream::Base.IO=stdout) = ConsoleMedia(stream)
+
+"""
+    ArchiveMedia(path::String)
+    ArchiveMedia(path::String; format::Symbol)
+
+A media backend for archive files. Supports reading and writing datasets packed into
+`.zip` or `.tar.gz` (`.tgz`) archives.
+
+The archive format is inferred from the file extension by default:
+- `.zip`    → `:zip`
+- `.tar.gz` / `.tgz` → `:tar_gz`
+
+# Arguments
+- `path::String`: Path to the archive file (need not exist yet for writes)
+- `format::Symbol`: Override the detected format (`:zip` or `:tar_gz`)
+
+# Example
+```julia
+# Write
+write_dataset(ArchiveMedia("output.zip"), dataset; overwrite=true)
+
+# Read
+dataset = read_dataset(ArchiveMedia("output.zip"))
+dataset = read_dataset(MyDataSet, "output.tar.gz")
+```
+"""
+struct ArchiveMedia <: iSourceMedia
+    path::String
+    format::Symbol
+
+    function ArchiveMedia(path::String; format::Symbol=_archive_format_from_path(path))
+        if !(format in (:zip, :tar_gz))
+            throw(ArgumentError("Unsupported archive format: $format. Supported: :zip, :tar_gz"))
+        end
+        new(path, format)
+    end
+end
+
+function _archive_format_from_path(path::String)
+    lp = lowercase(path)
+    endswith(lp, ".zip")    && return :zip
+    endswith(lp, ".tar.gz") && return :tar_gz
+    endswith(lp, ".tgz")    && return :tar_gz
+    throw(ArgumentError(
+        "Cannot determine archive format from path: \"$path\". " *
+        "Supported extensions: .zip, .tar.gz, .tgz. " *
+        "Use ArchiveMedia(path; format=:zip) to specify explicitly."
+    ))
+end

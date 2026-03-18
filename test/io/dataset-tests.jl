@@ -169,6 +169,79 @@ using JSON
             console = ConsoleMedia(stream=buffer)
             @test_throws ArgumentError read_dataset(console)
         end
+
+        @testset "ArchiveMedia write/read roundtrip (.zip)" begin
+            zip_path = joinpath(temp_dir, "dataset.zip")
+            source = ArchiveMedia(zip_path)
+            write_dataset(source, ds)
+
+            @test isfile(zip_path)
+
+            loaded = read_dataset(source)
+            @test loaded isa SampleDataSet
+            @test nrow(loaded.users) == 2
+            @test loaded.name == "demo-dataset"
+            @test loaded.metadata["version"] == 1
+
+            typed_loaded = read_dataset(SampleDataSet, source)
+            @test typed_loaded isa SampleDataSet
+            @test typed_loaded.metadata["owner"] == "qa"
+
+            loaded_from_path = read_dataset(zip_path)
+            @test loaded_from_path isa SampleDataSet
+            @test loaded_from_path.name == "demo-dataset"
+        end
+
+        @testset "ArchiveMedia write/read roundtrip (.tar.gz)" begin
+            tar_gz_path = joinpath(temp_dir, "dataset.tar.gz")
+            source = ArchiveMedia(tar_gz_path)
+            write_dataset(source, ds)
+
+            @test isfile(tar_gz_path)
+
+            loaded = read_dataset(source)
+            @test loaded isa SampleDataSet
+            @test nrow(loaded.orders) == 2
+            @test loaded.name == "demo-dataset"
+
+            typed_loaded = read_dataset(SampleDataSet, source)
+            @test typed_loaded isa SampleDataSet
+            @test typed_loaded.metadata["tags"] == ["sample", "io"]
+
+            loaded_from_path = read_dataset(tar_gz_path)
+            @test loaded_from_path isa SampleDataSet
+        end
+
+        @testset "ArchiveMedia overwrite protection" begin
+            zip_path = joinpath(temp_dir, "protected.zip")
+            source = ArchiveMedia(zip_path)
+            write_dataset(source, ds)
+            @test_throws ArgumentError write_dataset(source, ds)
+            write_dataset(source, ds; overwrite=true)   # must not throw
+            @test isfile(zip_path)
+        end
+
+        @testset "ArchiveMedia csv type roundtrip" begin
+            zip_path = joinpath(temp_dir, "dataset-csv.zip")
+            source = ArchiveMedia(zip_path)
+            write_dataset(source, ds; type=:csv)
+
+            loaded = read_dataset(source; type=:csv)
+            @test loaded isa SampleDataSet
+            @test nrow(loaded.users) == 2
+        end
+
+        @testset "ArchiveMedia format auto-detection" begin
+            @test ArchiveMedia("foo.zip").format    == :zip
+            @test ArchiveMedia("foo.tar.gz").format == :tar_gz
+            @test ArchiveMedia("foo.tgz").format    == :tar_gz
+            @test ArchiveMedia("foo.ZIP").format    == :zip
+            @test_throws ArgumentError ArchiveMedia("foo.rar")
+        end
+
+        @testset "ArchiveMedia read missing file" begin
+            @test_throws ArgumentError read_dataset(ArchiveMedia("nonexistent.zip"))
+        end
     finally
         try
             rm(temp_dir, recursive=true, force=true)
