@@ -298,7 +298,9 @@ from it, then clean up. Supports `:zip` and `:tar_gz` formats.
 """
 function read_dataset(source::IO.ArchiveMedia; type::Symbol=:arrow)
     isfile(source.path) || throw(ArgumentError("Archive file not found: $(source.path)"))
-    _with_archive_extracted(source) do tmp_media
+    declared_type = _read_archive_declared_type(source)
+    skip = _np_skip_files(declared_type, type)
+    _with_archive_extracted(source; skip_files=skip) do tmp_media
         read_dataset(tmp_media; type=type)
     end
 end
@@ -307,10 +309,11 @@ end
     read_dataset(::Type{T}, source::IO.ArchiveMedia; type::Symbol=:arrow)
 
 Typed variant of archive read. Reconstructs a concrete `T <: iDataSet` from the archive.
+Non-persisted fields declared via `nonpersisted_fields(T)` are skipped during extraction.
 """
 function read_dataset(::Type{T}, source::IO.ArchiveMedia; type::Symbol=:arrow) where {T <: iDataSet}
     isfile(source.path) || throw(ArgumentError("Archive file not found: $(source.path)"))
-    _with_archive_extracted(source) do tmp_media
+    _with_archive_extracted(source; skip_files=_np_skip_files(T, type)) do tmp_media
         read_dataset(T, tmp_media; type=type)
     end
 end
@@ -357,10 +360,51 @@ end
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-function _with_archive_extracted(f::Function, source::IO.ArchiveMedia)
+# Returns the set of archive file names (e.g. "scores.arrow") to skip for type T.
+function _np_skip_files(::Nothing, type::Symbol)
+    return Set{String}()
+end
+
+function _np_skip_files(::Type{T}, type::Symbol) where {T <: iDataSet}
+    fields = nonpersisted_fields(T)
+    isempty(fields) && return Set{String}()
+    ext = type == :arrow ? "arrow" : "csv"
+    return Set{String}(string(fn, ".", ext) for fn in fields)
+end
+
+# Peek at data_info.json inside a zip archive to resolve the declared dataset type.
+# Returns nothing for tar.gz (sequential stream — not worth two passes).
+function _read_archive_declared_type(source::IO.ArchiveMedia)
+    source.format == :zip || return nothing
+    r = ZipFile.Reader(source.path)
+    try
+        prefix = _zip_strip_prefix(r.files)
+        for f in r.files
+            norm = replace(f.name, '\\' => '/')
+            endswith(norm, '/') && continue
+            rel = isempty(prefix) ? norm : (startswith(norm, prefix) ? norm[length(prefix)+1:end] : norm)
+            rel == _DATASET_INFO_FILE || continue
+            info = JSON.parse(String(read(f)))
+            info isa AbstractDict || return nothing
+            haskey(info, "dataset_type") || return nothing
+            get(info, "__kind__", _DATASET_INFO_KIND) == _DATASET_INFO_KIND || return nothing
+            try
+                resolved = _dataset_resolve_type_from_name(string(info["dataset_type"]))
+                return (resolved <: iDataSet && Base.isconcretetype(resolved)) ? resolved : nothing
+            catch
+                return nothing
+            end
+        end
+    finally
+        close(r)
+    end
+    return nothing
+end
+
+function _with_archive_extracted(f::Function, source::IO.ArchiveMedia; skip_files::Set{String}=Set{String}())
     tmp_dir = mktempdir()
     try
-        _unpack_archive_to_dir(source.path, tmp_dir, source.format)
+        _unpack_archive_to_dir(source.path, tmp_dir, source.format; skip_files=skip_files)
         return f(IO.FileSystemMedia(tmp_dir))
     finally
         GC.gc()   # flush Arrow memory-mapped handles before cleanup
@@ -384,11 +428,11 @@ function _pack_dir_to_archive(source_dir::String, archive_path::String, format::
     end
 end
 
-function _unpack_archive_to_dir(archive_path::String, dest_dir::String, format::Symbol)
+function _unpack_archive_to_dir(archive_path::String, dest_dir::String, format::Symbol; skip_files::Set{String}=Set{String}())
     if format == :zip
-        _unpack_zip_to_dir(archive_path, dest_dir)
+        _unpack_zip_to_dir(archive_path, dest_dir; skip_files=skip_files)
     elseif format == :tar_gz
-        _unpack_tar_gz_to_dir(archive_path, dest_dir)
+        _unpack_tar_gz_to_dir(archive_path, dest_dir; skip_files=skip_files)
     else
         throw(ArgumentError("Unsupported archive format: $format. Supported: :zip, :tar_gz"))
     end
@@ -425,7 +469,7 @@ function _zip_strip_prefix(files)
     return root * "/"
 end
 
-function _unpack_zip_to_dir(zip_path::String, dest_dir::String)
+function _unpack_zip_to_dir(zip_path::String, dest_dir::String; skip_files::Set{String}=Set{String}())
     r = ZipFile.Reader(zip_path)
     try
         prefix = _zip_strip_prefix(r.files)
@@ -435,6 +479,7 @@ function _unpack_zip_to_dir(zip_path::String, dest_dir::String)
             endswith(norm_name, '/') && continue   # directory entry
             rel_name = isempty(prefix) ? norm_name : (startswith(norm_name, prefix) ? norm_name[length(prefix)+1:end] : norm_name)
             isempty(rel_name) && continue
+            basename(rel_name) in skip_files && continue   # skip non-persisted fields
             dest_path = joinpath(dest_dir, rel_name)
             mkpath(dirname(dest_path))
             open(dest_path, "w") do out
@@ -460,11 +505,15 @@ function _pack_dir_to_tar_gz(source_dir::String, tar_gz_path::String)
     end
 end
 
-function _unpack_tar_gz_to_dir(tar_gz_path::String, dest_dir::String)
+function _unpack_tar_gz_to_dir(tar_gz_path::String, dest_dir::String; skip_files::Set{String}=Set{String}())
     open(tar_gz_path, "r") do file_io
         gz_io = GzipDecompressorStream(file_io)
         try
-            Tar.extract(gz_io, dest_dir)
+            if isempty(skip_files)
+                Tar.extract(gz_io, dest_dir)
+            else
+                Tar.extract(hdr -> !(basename(hdr.path) in skip_files), gz_io, dest_dir)
+            end
         finally
             close(gz_io)
         end
