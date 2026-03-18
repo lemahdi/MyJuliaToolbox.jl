@@ -109,6 +109,7 @@ function _write_dataset_impl(source::IO.FileSystemMedia, dataset::iDataSet; type
         value = getfield(dataset, field_name)
         field_t = fieldtype(typeof(dataset), field_name)
         if value isa DataFrame
+            nrow(value) == 0 && continue   # skip empty DataFrames — absent on read-back means empty
             file_name = "$(field_name).$(ext)"
             IO.write_dataframe(source, file_name, value; format=type, overwrite=overwrite, atomic=atomic)
         elseif value isa iParameters
@@ -633,6 +634,8 @@ function _dataset_from_attributes(::Type{T}, attributes::Dict{Symbol,Any}, sourc
             found, loaded = isnothing(source) ? (false, nothing) : _try_load_parameters_field(field_type, field_name, source)
             if found
                 push!(values, loaded)
+            elseif field_type <: DataFrame
+                push!(values, DataFrame())   # absent = was 0-row when written; restore as empty
             else
                 throw(ArgumentError("Missing attribute '$field_name' for dataset type $(T)."))
             end

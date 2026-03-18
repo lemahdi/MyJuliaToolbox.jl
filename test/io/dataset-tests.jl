@@ -290,6 +290,56 @@ using JSON
             @test nrow(loaded.scratch) == 0
             @test loaded.label == "zipped"
         end
+
+        @testset "empty DataFrame auto-skip on write / auto-default on read (FileSystemMedia)" begin
+            struct DataSetWithConditional <: iDataSet
+                main::DataFrame
+                optional::DataFrame   # empty in some pipeline runs
+                label::String
+            end
+
+            cond_dir = joinpath(temp_dir, "conditional")
+            source = FileSystemMedia(cond_dir)
+            # write with empty optional field
+            ds_empty = DataSetWithConditional(users_df, DataFrame(), "daily")
+            write_dataset(source, ds_empty; overwrite=true)
+
+            @test !isfile(joinpath(cond_dir, "optional.arrow"))   # skipped because 0 rows
+            @test  isfile(joinpath(cond_dir, "main.arrow"))
+
+            loaded = read_dataset(DataSetWithConditional, source)
+            @test loaded isa DataSetWithConditional
+            @test nrow(loaded.main) == 2
+            @test nrow(loaded.optional) == 0   # defaults to DataFrame()
+            @test loaded.label == "daily"
+
+            # overwrite with populated optional field (quarterly mode)
+            ds_full = DataSetWithConditional(users_df, orders_df, "quarterly")
+            write_dataset(source, ds_full; overwrite=true)
+
+            @test isfile(joinpath(cond_dir, "optional.arrow"))   # present now
+            loaded_full = read_dataset(DataSetWithConditional, source)
+            @test nrow(loaded_full.optional) == 2
+            @test loaded_full.label == "quarterly"
+        end
+
+        @testset "empty DataFrame auto-skip on write / auto-default on read (ArchiveMedia .zip)" begin
+            struct DataSetWithConditionalZip <: iDataSet
+                main::DataFrame
+                scores::DataFrame
+                label::String
+            end
+
+            zip_cond = joinpath(temp_dir, "conditional.zip")
+            source = ArchiveMedia(zip_cond)
+            ds_empty = DataSetWithConditionalZip(users_df, DataFrame(), "daily")
+            write_dataset(source, ds_empty)
+
+            loaded = read_dataset(DataSetWithConditionalZip, source)
+            @test loaded isa DataSetWithConditionalZip
+            @test nrow(loaded.scores) == 0
+            @test loaded.label == "daily"
+        end
     finally
         try
             rm(temp_dir, recursive=true, force=true)
