@@ -293,28 +293,44 @@ end
 """
     read_dataset(source::IO.ArchiveMedia; type::Symbol=:arrow)
 
-Extract the archive at `source.path` to a temporary directory, read the dataset
-from it, then clean up. Supports `:zip` and `:tar_gz` formats.
+Read a dataset from an archive. For `.zip`: reads Arrow/CSV entries directly into
+in-memory `IOBuffer`s — no temp directory, no disk I/O. For `.tar.gz`: extracts to
+a temporary directory (sequential stream requires full decompression).
 """
 function read_dataset(source::IO.ArchiveMedia; type::Symbol=:arrow)
     isfile(source.path) || throw(ArgumentError("Archive file not found: $(source.path)"))
-    declared_type = _read_archive_declared_type(source)
-    skip = _np_skip_files(declared_type, type)
-    _with_archive_extracted(source; skip_files=skip) do tmp_media
-        read_dataset(tmp_media; type=type)
+    if source.format == :zip
+        loaded = _read_dataset_from_zip(source.path, nothing; type=type)
+        if loaded isa LoadedDataSet
+            declared_type = _read_archive_declared_type(source)
+            if !isnothing(declared_type)
+                return _dataset_from_attributes(declared_type, loaded.attributes, nothing)
+            end
+        end
+        return loaded
+    else
+        _with_archive_extracted(source) do tmp_media
+            read_dataset(tmp_media; type=type)
+        end
     end
 end
 
 """
     read_dataset(::Type{T}, source::IO.ArchiveMedia; type::Symbol=:arrow)
 
-Typed variant of archive read. Reconstructs a concrete `T <: iDataSet` from the archive.
-Non-persisted fields declared via `nonpersisted_fields(T)` are skipped during extraction.
+Typed variant of archive read. For `.zip`: reads Arrow/CSV entries directly into
+`IOBuffer`s — non-persisted fields declared via `nonpersisted_fields(T)` are skipped
+entirely (not read from the archive at all). For `.tar.gz`: extracts to a temp directory.
 """
 function read_dataset(::Type{T}, source::IO.ArchiveMedia; type::Symbol=:arrow) where {T <: iDataSet}
     isfile(source.path) || throw(ArgumentError("Archive file not found: $(source.path)"))
-    _with_archive_extracted(source; skip_files=_np_skip_files(T, type)) do tmp_media
-        read_dataset(T, tmp_media; type=type)
+    if source.format == :zip
+        loaded = _read_dataset_from_zip(source.path, T; type=type)
+        return _dataset_from_attributes(T, loaded.attributes, nothing)
+    else
+        _with_archive_extracted(source; skip_files=_np_skip_files(T, type)) do tmp_media
+            read_dataset(T, tmp_media; type=type)
+        end
     end
 end
 
@@ -399,6 +415,77 @@ function _read_archive_declared_type(source::IO.ArchiveMedia)
         close(r)
     end
     return nothing
+end
+
+# Read a zip archive directly into memory — no temp-dir, no disk I/O.
+# Arrow/CSV entries are buffered in seekable IOBuffers; JSON entries are parsed in-place.
+# target_type may be nothing (untyped) or a concrete iDataSet subtype (typed).
+function _read_dataset_from_zip(zip_path::String, target_type::Union{Type,Nothing}; type::Symbol=:arrow)
+    np_fields = isnothing(target_type) ? Set{Symbol}() : Set(nonpersisted_fields(target_type))
+    ext = "." * (type == :arrow ? "arrow" : "csv")
+
+    r = ZipFile.Reader(zip_path)
+    attributes  = Dict{Symbol,Any}()
+    json_buffers = Dict{String,String}()   # rel_path => raw JSON string
+    chunk = Vector{UInt8}(undef, 2 * 1024 * 1024)
+
+    try
+        prefix = _zip_strip_prefix(r.files)
+        for f in r.files
+            norm = replace(f.name, '\\' => '/')
+            endswith(norm, '/') && continue
+            rel = isempty(prefix) ? norm : (startswith(norm, prefix) ? norm[length(prefix)+1:end] : norm)
+            isempty(rel) && continue
+
+            if lowercase(splitext(rel)[2]) == ext
+                key = Symbol(splitext(basename(rel))[1])
+                key in np_fields && continue        # skip non-persisted fields entirely
+                buf = IOBuffer()
+                while !eof(f)
+                    n = readbytes!(f, chunk)
+                    write(buf, @view chunk[1:n])
+                end
+                seekstart(buf)
+                attributes[key] = IO.read_dataframe(buf; format=type)
+            elseif endswith(lowercase(rel), ".json")
+                json_buffers[rel] = String(read(f))
+            end
+        end
+    finally
+        close(r)
+    end
+
+    # Decode data.json — parameter refs resolved from in-memory json_buffers
+    if haskey(json_buffers, "data.json")
+        for (k, v) in JSON.parse(json_buffers["data.json"])
+            attributes[Symbol(k)] = _dataset_decode_json_value_zip(v, json_buffers)
+        end
+    end
+
+    return LoadedDataSet(attributes)
+end
+
+# Variant of _dataset_decode_json_value that resolves iParameters refs from
+# in-memory json_buffers (keyed by relative path) rather than from disk.
+function _dataset_decode_json_value_zip(value, json_buffers::Dict{String,String})
+    if _is_dataset_parameter_reference(value)
+        rel_path = _dataset_parameter_relative_path(value)
+        file     = _dataset_parameter_file(value)
+        json_key = isempty(rel_path) ? file : rel_path * "/" * file
+        param_data = JSON.parse(json_buffers[json_key])
+        target_type = _dataset_parameter_target_type(iParameters, value)
+        return parameters_from_dict(target_type, param_data)
+    elseif value isa AbstractVector
+        return [_dataset_decode_json_value_zip(v, json_buffers) for v in value]
+    elseif value isa AbstractDict
+        decoded = Dict{String,Any}()
+        for (k, v) in value
+            decoded[string(k)] = _dataset_decode_json_value_zip(v, json_buffers)
+        end
+        return decoded
+    else
+        return value
+    end
 end
 
 function _with_archive_extracted(f::Function, source::IO.ArchiveMedia; skip_files::Set{String}=Set{String}())
