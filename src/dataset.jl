@@ -16,7 +16,7 @@ const _DATASET_INFO_FILE = "data_info.json"
 # Avoids repeated Meta.parse + module traversal on every read_dataset call.
 const _DATASET_TYPE_CACHE = Dict{String, Type}()
 
-export iDataSet, LoadedDataSet, write_dataset, read_dataset
+export iDataSet, LoadedDataSet, write_dataset, read_dataset, nonpersisted_fields
 
 """
     abstract type iDataSet
@@ -40,6 +40,27 @@ end
 ```
 """
 abstract type iDataSet end
+
+"""
+    nonpersisted_fields(::Type{T}) -> Tuple{Vararg{Symbol}}
+
+Return the field names of `T` that `write_dataset` should skip and `read_dataset`
+should tolerate as absent (defaulting to a sensible zero value).
+
+Override this for any concrete `iDataSet` subtype that has optional or
+intentionally-omitted fields:
+
+```julia
+nonpersisted_fields(::Type{MyDataSet}) = (:cached_scores_df,)
+```
+
+**Automatic defaults by field type**
+- `DataFrame` → `DataFrame()`
+- `Union{Nothing, T}` → `nothing`
+
+Any other type requires the field to actually be present on disk.
+"""
+nonpersisted_fields(::Type{<:iDataSet}) = ()
 
 """
     LoadedDataSet(attributes::Dict{Symbol,Any})
@@ -82,11 +103,25 @@ function _write_dataset_impl(source::IO.FileSystemMedia, dataset::iDataSet; type
 
     payload = Dict{String,Any}()
     parameter_counter = Ref(0)
+    np_fields = Set(nonpersisted_fields(typeof(dataset)))
     for field_name in fieldnames(typeof(dataset))
+        field_name in np_fields && continue
         value = getfield(dataset, field_name)
+        field_t = fieldtype(typeof(dataset), field_name)
         if value isa DataFrame
+            nrow(value) == 0 && continue   # skip empty DataFrames — absent on read-back means empty
             file_name = "$(field_name).$(ext)"
             IO.write_dataframe(source, file_name, value; format=type, overwrite=overwrite, atomic=atomic)
+        elseif value isa iParameters
+            write_parameters(source, "$(field_name).json", value, _DATASET_PARAMETERS_DIR; overwrite=overwrite, pretty=pretty)
+            if _parameters_field_needs_type_ref(field_t)
+                payload[string(field_name)] = Dict(
+                    "__kind__" => _DATASET_PARAMETER_REF_KIND,
+                    "type" => string(typeof(value)),
+                    "file" => "$(field_name).json",
+                    "relative_path" => _DATASET_PARAMETERS_DIR,
+                )
+            end
         else
             payload[string(field_name)] = _dataset_to_json_value(value, source, parameter_counter; overwrite=overwrite, pretty=pretty)
         end
@@ -258,25 +293,42 @@ end
 """
     read_dataset(source::IO.ArchiveMedia; type::Symbol=:arrow)
 
-Extract the archive at `source.path` to a temporary directory, read the dataset
-from it, then clean up. Supports `:zip` and `:tar_gz` formats.
+Read a dataset from an archive. For `.zip`: reads Arrow/CSV entries directly into
+in-memory `IOBuffer`s — no temp directory, no disk I/O. For `.tar.gz`: extracts to
+a temporary directory (sequential stream requires full decompression).
 """
 function read_dataset(source::IO.ArchiveMedia; type::Symbol=:arrow)
     isfile(source.path) || throw(ArgumentError("Archive file not found: $(source.path)"))
-    _with_archive_extracted(source) do tmp_media
-        read_dataset(tmp_media; type=type)
+    if source.format == :zip
+        declared_type = _read_archive_declared_type(source)
+        loaded = _read_dataset_from_zip(source.path, declared_type; type=type)
+        if !isnothing(declared_type)
+            return _dataset_from_attributes(declared_type, loaded.attributes, nothing)
+        end
+        return loaded
+    else
+        _with_archive_extracted(source) do tmp_media
+            read_dataset(tmp_media; type=type)
+        end
     end
 end
 
 """
     read_dataset(::Type{T}, source::IO.ArchiveMedia; type::Symbol=:arrow)
 
-Typed variant of archive read. Reconstructs a concrete `T <: iDataSet` from the archive.
+Typed variant of archive read. For `.zip`: reads Arrow/CSV entries directly into
+`IOBuffer`s — non-persisted fields declared via `nonpersisted_fields(T)` are skipped
+entirely (not read from the archive at all). For `.tar.gz`: extracts to a temp directory.
 """
 function read_dataset(::Type{T}, source::IO.ArchiveMedia; type::Symbol=:arrow) where {T <: iDataSet}
     isfile(source.path) || throw(ArgumentError("Archive file not found: $(source.path)"))
-    _with_archive_extracted(source) do tmp_media
-        read_dataset(T, tmp_media; type=type)
+    if source.format == :zip
+        loaded = _read_dataset_from_zip(source.path, T; type=type)
+        return _dataset_from_attributes(T, loaded.attributes, nothing)
+    else
+        _with_archive_extracted(source; skip_files=_np_skip_files(T, type)) do tmp_media
+            read_dataset(T, tmp_media; type=type)
+        end
     end
 end
 
@@ -322,10 +374,121 @@ end
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-function _with_archive_extracted(f::Function, source::IO.ArchiveMedia)
+# Returns the set of archive file names (e.g. "scores.arrow") to skip for type T.
+function _np_skip_files(::Nothing, type::Symbol)
+    return Set{String}()
+end
+
+function _np_skip_files(::Type{T}, type::Symbol) where {T <: iDataSet}
+    fields = nonpersisted_fields(T)
+    isempty(fields) && return Set{String}()
+    ext = type == :arrow ? "arrow" : "csv"
+    return Set{String}(string(fn, ".", ext) for fn in fields)
+end
+
+# Peek at data_info.json inside a zip archive to resolve the declared dataset type.
+# Returns nothing for tar.gz (sequential stream — not worth two passes).
+function _read_archive_declared_type(source::IO.ArchiveMedia)
+    source.format == :zip || return nothing
+    r = ZipFile.Reader(source.path)
+    try
+        prefix = _zip_strip_prefix(r.files)
+        for f in r.files
+            norm = replace(f.name, '\\' => '/')
+            endswith(norm, '/') && continue
+            rel = isempty(prefix) ? norm : (startswith(norm, prefix) ? norm[length(prefix)+1:end] : norm)
+            rel == _DATASET_INFO_FILE || continue
+            info = JSON.parse(String(read(f)))
+            info isa AbstractDict || return nothing
+            haskey(info, "dataset_type") || return nothing
+            get(info, "__kind__", _DATASET_INFO_KIND) == _DATASET_INFO_KIND || return nothing
+            try
+                resolved = _dataset_resolve_type_from_name(string(info["dataset_type"]))
+                return (resolved <: iDataSet && Base.isconcretetype(resolved)) ? resolved : nothing
+            catch
+                return nothing
+            end
+        end
+    finally
+        close(r)
+    end
+    return nothing
+end
+
+# Read a zip archive directly into memory — no temp-dir, no disk I/O.
+# Arrow/CSV entries are buffered in seekable IOBuffers; JSON entries are parsed in-place.
+# target_type may be nothing (untyped) or a concrete iDataSet subtype (typed).
+function _read_dataset_from_zip(zip_path::String, target_type::Union{Type,Nothing}; type::Symbol=:arrow)
+    np_fields = isnothing(target_type) ? Set{Symbol}() : Set(nonpersisted_fields(target_type))
+    ext = "." * (type == :arrow ? "arrow" : "csv")
+
+    r = ZipFile.Reader(zip_path)
+    attributes  = Dict{Symbol,Any}()
+    json_buffers = Dict{String,String}()   # rel_path => raw JSON string
+
+    try
+        prefix = _zip_strip_prefix(r.files)
+        for f in r.files
+            norm = replace(f.name, '\\' => '/')
+            endswith(norm, '/') && continue
+            rel = isempty(prefix) ? norm : (startswith(norm, prefix) ? norm[length(prefix)+1:end] : norm)
+            isempty(rel) && continue
+
+            if lowercase(splitext(rel)[2]) == ext
+                key = Symbol(splitext(basename(rel))[1])
+                key in np_fields && continue        # skip non-persisted fields entirely
+                buf = IOBuffer(read(f))             # read(f) reads exactly uncompressedsize bytes
+                attributes[key] = IO.read_dataframe(buf; format=type)
+            elseif endswith(lowercase(rel), ".json")
+                json_buffers[rel] = String(read(f))
+            end
+        end
+    finally
+        close(r)
+    end
+
+    # Decode data.json — parameter refs resolved from in-memory json_buffers
+    if haskey(json_buffers, "data.json")
+        for (k, v) in JSON.parse(json_buffers["data.json"])
+            attributes[Symbol(k)] = _dataset_decode_json_value_zip(v, json_buffers)
+        end
+    end
+
+    return LoadedDataSet(attributes)
+end
+
+# Variant of _dataset_decode_json_value that resolves iParameters refs from
+# in-memory json_buffers (keyed by relative path) rather than from disk.
+function _dataset_decode_json_value_zip(value, json_buffers::Dict{String,String})
+    if _is_dataset_parameter_reference(value)
+        rel_path = _dataset_parameter_relative_path(value)
+        file     = _dataset_parameter_file(value)
+        json_key = isempty(rel_path) ? file : rel_path * "/" * file
+        param_data = JSON.parse(json_buffers[json_key])
+        try
+            target_type = _dataset_parameter_target_type(iParameters, value)
+            return parameters_from_dict(target_type, param_data)
+        catch
+            # type not loaded in this session — return raw parsed dict
+            return param_data
+        end
+    elseif value isa AbstractVector
+        return [_dataset_decode_json_value_zip(v, json_buffers) for v in value]
+    elseif value isa AbstractDict
+        decoded = Dict{String,Any}()
+        for (k, v) in value
+            decoded[string(k)] = _dataset_decode_json_value_zip(v, json_buffers)
+        end
+        return decoded
+    else
+        return value
+    end
+end
+
+function _with_archive_extracted(f::Function, source::IO.ArchiveMedia; skip_files::Set{String}=Set{String}())
     tmp_dir = mktempdir()
     try
-        _unpack_archive_to_dir(source.path, tmp_dir, source.format)
+        _unpack_archive_to_dir(source.path, tmp_dir, source.format; skip_files=skip_files)
         return f(IO.FileSystemMedia(tmp_dir))
     finally
         GC.gc()   # flush Arrow memory-mapped handles before cleanup
@@ -349,11 +512,11 @@ function _pack_dir_to_archive(source_dir::String, archive_path::String, format::
     end
 end
 
-function _unpack_archive_to_dir(archive_path::String, dest_dir::String, format::Symbol)
+function _unpack_archive_to_dir(archive_path::String, dest_dir::String, format::Symbol; skip_files::Set{String}=Set{String}())
     if format == :zip
-        _unpack_zip_to_dir(archive_path, dest_dir)
+        _unpack_zip_to_dir(archive_path, dest_dir; skip_files=skip_files)
     elseif format == :tar_gz
-        _unpack_tar_gz_to_dir(archive_path, dest_dir)
+        _unpack_tar_gz_to_dir(archive_path, dest_dir; skip_files=skip_files)
     else
         throw(ArgumentError("Unsupported archive format: $format. Supported: :zip, :tar_gz"))
     end
@@ -376,14 +539,39 @@ function _pack_dir_to_zip(source_dir::String, zip_path::String)
     end
 end
 
-function _unpack_zip_to_dir(zip_path::String, dest_dir::String)
+function _zip_strip_prefix(files)
+    # If every entry shares the same top-level directory, return it (with trailing slash).
+    # Many zip tools wrap everything in a root folder; strip it so extraction lands flat.
+    isempty(files) && return ""
+    first_parts = split(replace(files[1].name, '\\' => '/'), '/')
+    length(first_parts) < 2 && return ""
+    root = first_parts[1]
+    for f in files
+        parts = split(replace(f.name, '\\' => '/'), '/')
+        (length(parts) < 2 || parts[1] != root) && return ""
+    end
+    return root * "/"
+end
+
+function _unpack_zip_to_dir(zip_path::String, dest_dir::String; skip_files::Set{String}=Set{String}())
     r = ZipFile.Reader(zip_path)
     try
+        prefix = _zip_strip_prefix(r.files)
+        buf = Vector{UInt8}(undef, 2 * 1024 * 1024)   # 2 MB scratch buffer
         for f in r.files
-            endswith(f.name, '/') && continue   # directory entry
-            dest_path = joinpath(dest_dir, f.name)
+            norm_name = replace(f.name, '\\' => '/')
+            endswith(norm_name, '/') && continue   # directory entry
+            rel_name = isempty(prefix) ? norm_name : (startswith(norm_name, prefix) ? norm_name[length(prefix)+1:end] : norm_name)
+            isempty(rel_name) && continue
+            basename(rel_name) in skip_files && continue   # skip non-persisted fields
+            dest_path = joinpath(dest_dir, rel_name)
             mkpath(dirname(dest_path))
-            write(dest_path, read(f))
+            open(dest_path, "w") do out
+                while !eof(f)
+                    n = readbytes!(f, buf)
+                    write(out, @view buf[1:n])
+                end
+            end
         end
     finally
         close(r)
@@ -401,11 +589,15 @@ function _pack_dir_to_tar_gz(source_dir::String, tar_gz_path::String)
     end
 end
 
-function _unpack_tar_gz_to_dir(tar_gz_path::String, dest_dir::String)
+function _unpack_tar_gz_to_dir(tar_gz_path::String, dest_dir::String; skip_files::Set{String}=Set{String}())
     open(tar_gz_path, "r") do file_io
         gz_io = GzipDecompressorStream(file_io)
         try
-            Tar.extract(gz_io, dest_dir)
+            if isempty(skip_files)
+                Tar.extract(gz_io, dest_dir)
+            else
+                Tar.extract(hdr -> !(basename(hdr.path) in skip_files), gz_io, dest_dir)
+            end
         finally
             close(gz_io)
         end
@@ -472,8 +664,13 @@ end
 
 function _dataset_decode_json_value(value, source::IO.iSourceMedia)
     if _is_dataset_parameter_reference(value)
-        target_type = _dataset_parameter_target_type(iParameters, value)
-        return read_parameters(target_type, source, _dataset_parameter_file(value), _dataset_parameter_relative_path(value))
+        try
+            target_type = _dataset_parameter_target_type(iParameters, value)
+            return read_parameters(target_type, source, _dataset_parameter_file(value), _dataset_parameter_relative_path(value))
+        catch
+            # type not loaded in this session — read raw JSON and return dict
+            return read_parameters_raw(source, _dataset_parameter_file(value), _dataset_parameter_relative_path(value))
+        end
     elseif value isa AbstractVector
         return [_dataset_decode_json_value(v, source) for v in value]
     elseif value isa AbstractDict
@@ -485,6 +682,15 @@ function _dataset_decode_json_value(value, source::IO.iSourceMedia)
     else
         return value
     end
+end
+
+# Read a parameters file and return the raw parsed Dict without type reconstruction.
+# Used as a fallback when the concrete iParameters type cannot be resolved in the
+# current session (e.g., untyped read_dataset called without loading the type definition).
+function read_parameters_raw(source::IO.FileSystemMedia, file_name::AbstractString, relative_path::AbstractString="")
+    full_path = joinpath(source.path, relative_path, file_name)
+    isfile(full_path) || throw(ArgumentError("Parameter file not found: $full_path"))
+    return JSON.parsefile(full_path)
 end
 
 function _is_dataset_parameter_reference(value)
@@ -551,9 +757,30 @@ function _dataset_resolve_type_expr(expr::Expr)
     return getfield(left, right_symbol)
 end
 
+function _try_load_parameters_field(::Type{T}, field_name::Symbol, source::IO.FileSystemMedia) where {T <: iParameters}
+    file = "$(field_name).json"
+    params_path = joinpath(source.path, _DATASET_PARAMETERS_DIR, file)
+    isfile(params_path) || return (false, nothing)
+    Base.isconcretetype(T) || throw(ArgumentError("Cannot deserialize abstract iParameters field type $(T) for field '$field_name'. Use a concrete subtype."))
+    return (true, read_parameters(T, source, file, _DATASET_PARAMETERS_DIR))
+end
+
+function _try_load_parameters_field(::Type{Union{Nothing, S}}, field_name::Symbol, source::IO.FileSystemMedia) where {S <: iParameters}
+    file = "$(field_name).json"
+    params_path = joinpath(source.path, _DATASET_PARAMETERS_DIR, file)
+    !isfile(params_path) && return (true, nothing)
+    Base.isconcretetype(S) || throw(ArgumentError("Cannot deserialize abstract iParameters field type $(S) for field '$field_name'. Use a concrete subtype."))
+    return (true, read_parameters(S, source, file, _DATASET_PARAMETERS_DIR))
+end
+
+function _try_load_parameters_field(::Type{T}, field_name::Symbol, source) where {T}
+    return (false, nothing)
+end
+
 function _dataset_from_attributes(::Type{T}, attributes::Dict{Symbol,Any}, source::Union{IO.iSourceMedia,Nothing}=nothing) where {T <: iDataSet}
     expected_fields = fieldnames(T)
     expected_set = Set(expected_fields)
+    np_fields = Set(nonpersisted_fields(T))
 
     for key in keys(attributes)
         if !(key in expected_set)
@@ -563,14 +790,33 @@ function _dataset_from_attributes(::Type{T}, attributes::Dict{Symbol,Any}, sourc
 
     values = Any[]
     for field_name in expected_fields
-        if !haskey(attributes, field_name)
-            throw(ArgumentError("Missing attribute '$field_name' for dataset type $(T)."))
-        end
         field_type = fieldtype(T, field_name)
-        push!(values, _dataset_convert_value(field_type, attributes[field_name], source))
+        if haskey(attributes, field_name)
+            push!(values, _dataset_convert_value(field_type, attributes[field_name], source))
+        elseif field_name in np_fields
+            push!(values, _nonpersisted_default(field_type, field_name, T))
+        else
+            found, loaded = isnothing(source) ? (false, nothing) : _try_load_parameters_field(field_type, field_name, source)
+            if found
+                push!(values, loaded)
+            elseif field_type <: DataFrame
+                push!(values, DataFrame())   # absent = was 0-row when written; restore as empty
+            else
+                throw(ArgumentError("Missing attribute '$field_name' for dataset type $(T)."))
+            end
+        end
     end
 
     return T(values...)
+end
+
+function _nonpersisted_default(::Type{T}, field_name::Symbol, dataset_type::Type) where {T}
+    T <: DataFrame && return DataFrame()
+    Nothing <: T  && return nothing
+    throw(ArgumentError(
+        "Non-persisted field '$field_name' of type $T in $(dataset_type) has no automatic default. " *
+        "Only DataFrame and Union{Nothing,…} fields are defaulted automatically."
+    ))
 end
 
 function _dataset_convert_value(::Type{Any}, value, source::Union{IO.iSourceMedia,Nothing}=nothing)
@@ -643,6 +889,18 @@ end
 
 function _dataset_convert_value(::Type{Union{Nothing, S}}, value, source::Union{IO.iSourceMedia,Nothing}=nothing) where {S}
     return value === nothing ? nothing : _dataset_convert_value(S, value, source)
+end
+
+function _parameters_field_needs_type_ref(::Type{T}) where {T <: iParameters}
+    return !Base.isconcretetype(T)
+end
+
+function _parameters_field_needs_type_ref(::Type{Union{Nothing, S}}) where {S <: iParameters}
+    return !Base.isconcretetype(S)
+end
+
+function _parameters_field_needs_type_ref(::Type{T}) where {T}
+    return false
 end
 
 function _dataset_convert_key(::Type{String}, key)

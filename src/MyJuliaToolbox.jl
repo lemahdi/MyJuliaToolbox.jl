@@ -13,8 +13,8 @@ Primary exported helpers (re-exported from `MyJuliaToolbox.IO`):
 # Include submodules
 include("io.jl")
 include("utils.jl")
-include("dataset.jl")
 include("parameters.jl")
+include("dataset.jl")
 
 # Re-export commonly-used IO helpers at top level for convenience
 using .IO: read_dataframe, write_dataframe, read_csv_to_df, read_arrow_to_df
@@ -24,6 +24,6 @@ using .Utils: date2int, int2date, days_between, yearfrac, add_days_convention, c
 export read_dataframe, write_dataframe, read_csv_to_df, read_arrow_to_df, date2int, int2date, days_between, yearfrac, add_days_convention, compare_dataframes
 export iSourceMedia, FileSystemMedia, DatabaseMedia, SQLDumpMedia, ConsoleMedia, ArchiveMedia
 export LogRecord, AsyncLogger, log!, log_debug!, log_info!, log_warn!, log_error!, flush_logger!, stop_logger!, dropped_logs
-export iDataSet, iParameters
+export iDataSet, iParameters, nonpersisted_fields
 
 end

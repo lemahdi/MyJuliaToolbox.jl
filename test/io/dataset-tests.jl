@@ -120,7 +120,8 @@ using JSON
             params_ref = data_json["parameters"]
             @test params_ref["__kind__"] == "mjt_iParameters_ref"
             @test params_ref["relative_path"] == "parameters"
-            @test isfile(joinpath(params_dir, "parameters", params_ref["file"]))
+            @test params_ref["file"] == "parameters.json"
+            @test isfile(joinpath(params_dir, "parameters", "parameters.json"))
 
             loaded_untyped = read_dataset(source)
             @test loaded_untyped isa DataSetWithParams
@@ -241,6 +242,147 @@ using JSON
 
         @testset "ArchiveMedia read missing file" begin
             @test_throws ArgumentError read_dataset(ArchiveMedia("nonexistent.zip"))
+        end
+
+        @testset "nonpersisted_fields — absent field defaults on FileSystemMedia" begin
+            struct DataSetWithNP <: iDataSet
+                users::DataFrame
+                cache::DataFrame        # non-persisted
+                name::String
+                opt::Union{Nothing,String}  # non-persisted
+            end
+            MyJuliaToolbox.nonpersisted_fields(::Type{DataSetWithNP}) = (:cache, :opt)
+
+            np_dir = joinpath(temp_dir, "nonpersisted")
+            source = FileSystemMedia(np_dir)
+            ds_np = DataSetWithNP(users_df, DataFrame(x=[1,2]), "np-test", "hello")
+
+            write_dataset(source, ds_np; overwrite=true)
+
+            # non-persisted fields must be absent from disk
+            @test !isfile(joinpath(np_dir, "cache.arrow"))
+            @test !haskey(JSON.parsefile(joinpath(np_dir, "data.json")), "opt")
+
+            # read back: non-persisted fields get automatic defaults
+            loaded = read_dataset(DataSetWithNP, source)
+            @test loaded isa DataSetWithNP
+            @test nrow(loaded.cache) == 0        # DataFrame()
+            @test loaded.opt === nothing          # Union{Nothing,...}
+            @test loaded.name == "np-test"
+            @test nrow(loaded.users) == 2
+        end
+
+        @testset "nonpersisted_fields — absent field defaults on ArchiveMedia (.zip)" begin
+            struct DataSetWithNPZip <: iDataSet
+                orders::DataFrame
+                scratch::DataFrame   # non-persisted
+                label::String
+            end
+            MyJuliaToolbox.nonpersisted_fields(::Type{DataSetWithNPZip}) = (:scratch,)
+
+            zip_np_path = joinpath(temp_dir, "np-dataset.zip")
+            source = ArchiveMedia(zip_np_path)
+            ds_npz = DataSetWithNPZip(orders_df, DataFrame(tmp=[99]), "zipped")
+
+            write_dataset(source, ds_npz)
+            loaded = read_dataset(DataSetWithNPZip, source)
+            @test loaded isa DataSetWithNPZip
+            @test nrow(loaded.scratch) == 0
+            @test loaded.label == "zipped"
+        end
+
+        @testset "ArchiveMedia untyped read honors nonpersisted_fields from declared type" begin
+            struct DataSetWithPersistedScratch <: iDataSet
+                users::DataFrame
+                scratch::DataFrame
+                label::String
+            end
+
+            struct DataSetWithNPScratch <: iDataSet
+                users::DataFrame
+                scratch::DataFrame
+                label::String
+            end
+
+            MyJuliaToolbox.nonpersisted_fields(::Type{DataSetWithNPScratch}) = (:scratch,)
+
+            declared_dir = joinpath(temp_dir, "declared-np")
+            dataset_dir = joinpath(declared_dir, "dataset")
+            mkpath(dataset_dir)
+
+            write_dataset(
+                FileSystemMedia(dataset_dir),
+                DataSetWithPersistedScratch(users_df, DataFrame(v=[10, 20, 30]), "has-scratch");
+                overwrite=true,
+            )
+
+            @test isfile(joinpath(dataset_dir, "scratch.arrow"))
+
+            info_path = joinpath(dataset_dir, "data_info.json")
+            info = JSON.parsefile(info_path)
+            info["dataset_type"] = string(DataSetWithNPScratch)
+            open(info_path, "w") do io
+                JSON.print(io, info, 2)
+            end
+
+            zip_path = joinpath(declared_dir, "declared-np.zip")
+            MyJuliaToolbox._pack_dir_to_archive(dataset_dir, zip_path, :zip)
+
+            loaded = read_dataset(ArchiveMedia(zip_path))
+            @test loaded isa DataSetWithNPScratch
+            @test nrow(loaded.users) == 2
+            @test nrow(loaded.scratch) == 0
+            @test loaded.label == "has-scratch"
+        end
+
+        @testset "empty DataFrame auto-skip on write / auto-default on read (FileSystemMedia)" begin
+            struct DataSetWithConditional <: iDataSet
+                main::DataFrame
+                optional::DataFrame   # empty in some pipeline runs
+                label::String
+            end
+
+            cond_dir = joinpath(temp_dir, "conditional")
+            source = FileSystemMedia(cond_dir)
+            # write with empty optional field
+            ds_empty = DataSetWithConditional(users_df, DataFrame(), "daily")
+            write_dataset(source, ds_empty; overwrite=true)
+
+            @test !isfile(joinpath(cond_dir, "optional.arrow"))   # skipped because 0 rows
+            @test  isfile(joinpath(cond_dir, "main.arrow"))
+
+            loaded = read_dataset(DataSetWithConditional, source)
+            @test loaded isa DataSetWithConditional
+            @test nrow(loaded.main) == 2
+            @test nrow(loaded.optional) == 0   # defaults to DataFrame()
+            @test loaded.label == "daily"
+
+            # overwrite with populated optional field (quarterly mode)
+            ds_full = DataSetWithConditional(users_df, orders_df, "quarterly")
+            write_dataset(source, ds_full; overwrite=true)
+
+            @test isfile(joinpath(cond_dir, "optional.arrow"))   # present now
+            loaded_full = read_dataset(DataSetWithConditional, source)
+            @test nrow(loaded_full.optional) == 2
+            @test loaded_full.label == "quarterly"
+        end
+
+        @testset "empty DataFrame auto-skip on write / auto-default on read (ArchiveMedia .zip)" begin
+            struct DataSetWithConditionalZip <: iDataSet
+                main::DataFrame
+                scores::DataFrame
+                label::String
+            end
+
+            zip_cond = joinpath(temp_dir, "conditional.zip")
+            source = ArchiveMedia(zip_cond)
+            ds_empty = DataSetWithConditionalZip(users_df, DataFrame(), "daily")
+            write_dataset(source, ds_empty)
+
+            loaded = read_dataset(DataSetWithConditionalZip, source)
+            @test loaded isa DataSetWithConditionalZip
+            @test nrow(loaded.scores) == 0
+            @test loaded.label == "daily"
         end
     finally
         try
