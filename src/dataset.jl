@@ -51,7 +51,7 @@ Override this for any concrete `iDataSet` subtype that has optional or
 intentionally-omitted fields:
 
 ```julia
-nonpersisted_fields(::Type{RSUDataSet}) = (:stepwise_scores_df,)
+nonpersisted_fields(::Type{MyDataSet}) = (:cached_scores_df,)
 ```
 
 **Automatic defaults by field type**
@@ -300,12 +300,10 @@ a temporary directory (sequential stream requires full decompression).
 function read_dataset(source::IO.ArchiveMedia; type::Symbol=:arrow)
     isfile(source.path) || throw(ArgumentError("Archive file not found: $(source.path)"))
     if source.format == :zip
-        loaded = _read_dataset_from_zip(source.path, nothing; type=type)
-        if loaded isa LoadedDataSet
-            declared_type = _read_archive_declared_type(source)
-            if !isnothing(declared_type)
-                return _dataset_from_attributes(declared_type, loaded.attributes, nothing)
-            end
+        declared_type = _read_archive_declared_type(source)
+        loaded = _read_dataset_from_zip(source.path, declared_type; type=type)
+        if !isnothing(declared_type)
+            return _dataset_from_attributes(declared_type, loaded.attributes, nothing)
         end
         return loaded
     else
@@ -427,7 +425,6 @@ function _read_dataset_from_zip(zip_path::String, target_type::Union{Type,Nothin
     r = ZipFile.Reader(zip_path)
     attributes  = Dict{Symbol,Any}()
     json_buffers = Dict{String,String}()   # rel_path => raw JSON string
-    chunk = Vector{UInt8}(undef, 2 * 1024 * 1024)
 
     try
         prefix = _zip_strip_prefix(r.files)
@@ -440,12 +437,7 @@ function _read_dataset_from_zip(zip_path::String, target_type::Union{Type,Nothin
             if lowercase(splitext(rel)[2]) == ext
                 key = Symbol(splitext(basename(rel))[1])
                 key in np_fields && continue        # skip non-persisted fields entirely
-                buf = IOBuffer()
-                while !eof(f)
-                    n = readbytes!(f, chunk)
-                    write(buf, @view chunk[1:n])
-                end
-                seekstart(buf)
+                buf = IOBuffer(read(f))             # read(f) reads exactly uncompressedsize bytes
                 attributes[key] = IO.read_dataframe(buf; format=type)
             elseif endswith(lowercase(rel), ".json")
                 json_buffers[rel] = String(read(f))
@@ -473,8 +465,13 @@ function _dataset_decode_json_value_zip(value, json_buffers::Dict{String,String}
         file     = _dataset_parameter_file(value)
         json_key = isempty(rel_path) ? file : rel_path * "/" * file
         param_data = JSON.parse(json_buffers[json_key])
-        target_type = _dataset_parameter_target_type(iParameters, value)
-        return parameters_from_dict(target_type, param_data)
+        try
+            target_type = _dataset_parameter_target_type(iParameters, value)
+            return parameters_from_dict(target_type, param_data)
+        catch
+            # type not loaded in this session — return raw parsed dict
+            return param_data
+        end
     elseif value isa AbstractVector
         return [_dataset_decode_json_value_zip(v, json_buffers) for v in value]
     elseif value isa AbstractDict
@@ -667,8 +664,13 @@ end
 
 function _dataset_decode_json_value(value, source::IO.iSourceMedia)
     if _is_dataset_parameter_reference(value)
-        target_type = _dataset_parameter_target_type(iParameters, value)
-        return read_parameters(target_type, source, _dataset_parameter_file(value), _dataset_parameter_relative_path(value))
+        try
+            target_type = _dataset_parameter_target_type(iParameters, value)
+            return read_parameters(target_type, source, _dataset_parameter_file(value), _dataset_parameter_relative_path(value))
+        catch
+            # type not loaded in this session — read raw JSON and return dict
+            return read_parameters_raw(source, _dataset_parameter_file(value), _dataset_parameter_relative_path(value))
+        end
     elseif value isa AbstractVector
         return [_dataset_decode_json_value(v, source) for v in value]
     elseif value isa AbstractDict
@@ -680,6 +682,15 @@ function _dataset_decode_json_value(value, source::IO.iSourceMedia)
     else
         return value
     end
+end
+
+# Read a parameters file and return the raw parsed Dict without type reconstruction.
+# Used as a fallback when the concrete iParameters type cannot be resolved in the
+# current session (e.g., untyped read_dataset called without loading the type definition).
+function read_parameters_raw(source::IO.FileSystemMedia, file_name::AbstractString, relative_path::AbstractString="")
+    full_path = joinpath(source.path, relative_path, file_name)
+    isfile(full_path) || throw(ArgumentError("Parameter file not found: $full_path"))
+    return JSON.parsefile(full_path)
 end
 
 function _is_dataset_parameter_reference(value)

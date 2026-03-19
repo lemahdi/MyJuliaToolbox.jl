@@ -291,6 +291,50 @@ using JSON
             @test loaded.label == "zipped"
         end
 
+        @testset "ArchiveMedia untyped read honors nonpersisted_fields from declared type" begin
+            struct DataSetWithPersistedScratch <: iDataSet
+                users::DataFrame
+                scratch::DataFrame
+                label::String
+            end
+
+            struct DataSetWithNPScratch <: iDataSet
+                users::DataFrame
+                scratch::DataFrame
+                label::String
+            end
+
+            MyJuliaToolbox.nonpersisted_fields(::Type{DataSetWithNPScratch}) = (:scratch,)
+
+            declared_dir = joinpath(temp_dir, "declared-np")
+            dataset_dir = joinpath(declared_dir, "dataset")
+            mkpath(dataset_dir)
+
+            write_dataset(
+                FileSystemMedia(dataset_dir),
+                DataSetWithPersistedScratch(users_df, DataFrame(v=[10, 20, 30]), "has-scratch");
+                overwrite=true,
+            )
+
+            @test isfile(joinpath(dataset_dir, "scratch.arrow"))
+
+            info_path = joinpath(dataset_dir, "data_info.json")
+            info = JSON.parsefile(info_path)
+            info["dataset_type"] = string(DataSetWithNPScratch)
+            open(info_path, "w") do io
+                JSON.print(io, info, 2)
+            end
+
+            zip_path = joinpath(declared_dir, "declared-np.zip")
+            MyJuliaToolbox._pack_dir_to_archive(dataset_dir, zip_path, :zip)
+
+            loaded = read_dataset(ArchiveMedia(zip_path))
+            @test loaded isa DataSetWithNPScratch
+            @test nrow(loaded.users) == 2
+            @test nrow(loaded.scratch) == 0
+            @test loaded.label == "has-scratch"
+        end
+
         @testset "empty DataFrame auto-skip on write / auto-default on read (FileSystemMedia)" begin
             struct DataSetWithConditional <: iDataSet
                 main::DataFrame
