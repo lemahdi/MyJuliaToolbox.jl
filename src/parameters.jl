@@ -318,3 +318,61 @@ end
 function _convert_value(::Type{Union{Nothing, S}}, value) where {S}
     return value === nothing ? nothing : _convert_value(S, value)
 end
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MinIOMedia support
+# ──────────────────────────────────────────────────────────────────────────────
+
+function _write_parameters_impl(source::IO.MinIOMedia,
+                                  file_name::AbstractString,
+                                  params::iParameters,
+                                  relative_path::AbstractString;
+                                  overwrite::Bool = false,
+                                  pretty::Bool    = true)
+    lowercase(splitext(String(file_name))[2]) == ".json" || throw(ArgumentError(
+        "Invalid parameter file '$file_name': expected a .json file."))
+
+    rel_key = isempty(relative_path) ? String(file_name) :
+              "$(rstrip(relative_path, '/'))/$(file_name)"
+    key     = IO._minio_key(source, rel_key)
+
+    !overwrite && IO._s3_exists(source, key) && throw(ArgumentError(
+        "Object already exists: $key. Pass overwrite=true to overwrite."))
+
+    json_str = pretty ? JSON.json(_parameter_to_json_value(params), 2) :
+                        JSON.json(_parameter_to_json_value(params))
+    IO._s3_put_bytes(source, key, Vector{UInt8}(json_str);
+                     content_type = "application/json")
+    return nothing
+end
+
+function _read_parameters_impl(::Type{T},
+                                 source::IO.MinIOMedia,
+                                 file_name::AbstractString,
+                                 relative_path::AbstractString) where {T <: iParameters}
+    lowercase(splitext(String(file_name))[2]) == ".json" || throw(ArgumentError(
+        "Invalid parameter file '$file_name': expected a .json file."))
+
+    rel_key = isempty(relative_path) ? String(file_name) :
+              "$(rstrip(relative_path, '/'))/$(file_name)"
+    key     = IO._minio_key(source, rel_key)
+
+    IO._s3_exists(source, key) || throw(ArgumentError(
+        "Parameter object not found: bucket=$(source.bucket), key=$key"))
+
+    data = JSON.parse(String(IO._s3_get_bytes(source, key)))
+    return parameters_from_dict(T, data)
+end
+
+# Raw fallback used by the untyped dataset read path when the concrete
+# iParameters type cannot be resolved in the current session
+function read_parameters_raw(source::IO.MinIOMedia,
+                              file_name::AbstractString,
+                              relative_path::AbstractString = "")
+    rel_key = isempty(relative_path) ? String(file_name) :
+              "$(rstrip(relative_path, '/'))/$(file_name)"
+    key     = IO._minio_key(source, rel_key)
+    IO._s3_exists(source, key) || throw(ArgumentError(
+        "Parameter object not found: bucket=$(source.bucket), key=$key"))
+    return JSON.parse(String(IO._s3_get_bytes(source, key)))
+end
