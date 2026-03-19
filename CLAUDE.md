@@ -431,4 +431,21 @@ df = read_dataframe(db; query="SELECT * FROM menages WHERE region_id = 3")
 
 ---
 
-*Last updated: 2026-03-18 (added ArchiveMedia: .zip and .tar.gz dataset read/write, ZipFile/Tar deps, Windows cleanup notes)*
+## Command Execution (Project-Specific)
+
+- Run the test suite autonomously **when asked** — no confirmation needed once requested.
+  Do not run tests automatically after code changes unless explicitly told to:
+  ```
+  julia --project=. -e 'using Pkg; Pkg.test()'
+  ```
+- After a failed test run, iterate and re-run the suite autonomously until green
+  or until the root cause clearly requires a design decision.
+- Run `Pkg.resolve()` and `Pkg.instantiate()` autonomously (they only update
+  `Manifest.toml`, never add new dependencies).
+- Sandbox scripts under `src/sandbox/` may be run autonomously for verification.
+- Do NOT run `Pkg.add`, `Pkg.rm`, or `Pkg.update` without asking — adding or
+  removing dependencies requires explicit approval (see global Code Quality rule).
+
+---
+
+*Last updated: 2026-03-19 (added Command Execution section; ArchiveMedia: .zip and .tar.gz dataset read/write, ZipFile/Tar deps, Windows cleanup notes)*
