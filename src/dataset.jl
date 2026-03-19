@@ -604,6 +604,133 @@ function _unpack_tar_gz_to_dir(tar_gz_path::String, dest_dir::String; skip_files
     end
 end
 
+# ──────────────────────────────────────────────────────────────────────────────
+# MinIOMedia support
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    _write_dataset_impl(source::IO.MinIOMedia, dataset::iDataSet; kwargs...)
+
+Write `dataset` to MinIO by serialising to a temporary local directory via
+`FileSystemMedia`, then uploading every produced file as an S3 object.
+
+When `atomic=true` (default), any upload failure triggers a best-effort
+deletion of already-uploaded keys so the bucket is not left partially written.
+S3/MinIO has no native multi-object atomic commit, so this is a cleanup
+heuristic rather than a true transaction.
+"""
+function _write_dataset_impl(source::IO.MinIOMedia, dataset::iDataSet;
+                              type::Symbol    = :arrow,
+                              overwrite::Bool = false,
+                              atomic::Bool    = true,
+                              pretty::Bool    = true)
+    type in (:arrow, :csv) || throw(ArgumentError(
+        "Unsupported dataset type: $type. Supported: :arrow, :csv."))
+
+    tmp_dir = mktempdir()
+    try
+        _write_dataset_impl(IO.FileSystemMedia(tmp_dir), dataset;
+                            type=type, overwrite=true, atomic=false, pretty=pretty)
+
+        uploaded = String[]
+        try
+            for (root, _, files) in walkdir(tmp_dir)
+                for fname in files
+                    local_path   = joinpath(root, fname)
+                    rel_path     = replace(relpath(local_path, tmp_dir), '\\' => '/')
+                    key          = IO._minio_key(source, rel_path)
+
+                    if !overwrite && IO._s3_exists(source, key)
+                        throw(ArgumentError(
+                            "Object already exists: $key. Pass overwrite=true to overwrite."))
+                    end
+
+                    content_type = if endswith(lowercase(fname), ".arrow")
+                        "application/vnd.apache.arrow.stream"
+                    elseif endswith(lowercase(fname), ".csv")
+                        "text/csv"
+                    else
+                        "application/json"
+                    end
+                    IO._s3_put_bytes(source, key, read(local_path); content_type)
+                    push!(uploaded, key)
+                end
+            end
+        catch
+            if atomic
+                for key in uploaded
+                    try IO._s3_delete(source, key) catch; end
+                end
+            end
+            rethrow()
+        end
+    finally
+        rm(tmp_dir; recursive=true, force=true)
+    end
+    return nothing
+end
+
+"""
+    _read_dataset_impl(source::IO.MinIOMedia; type=:arrow) -> LoadedDataSet
+
+List all objects under `source.prefix`, download them to a temporary local
+directory, then delegate to `FileSystemMedia` logic to reconstruct the dataset.
+"""
+function _read_dataset_impl(source::IO.MinIOMedia; type::Symbol = :arrow)
+    type in (:arrow, :csv) || throw(ArgumentError(
+        "Unsupported dataset type: $type. Supported: :arrow, :csv."))
+
+    search_prefix = isempty(source.prefix) ? "" : source.prefix * "/"
+    all_keys      = IO._s3_list_keys(source, search_prefix)
+
+    isempty(all_keys) && throw(ArgumentError(
+        "No objects found at bucket=$(source.bucket), prefix=$(repr(source.prefix)). " *
+        "Has the dataset been written yet?"))
+
+    tmp_dir = mktempdir()
+    try
+        for key in all_keys
+            rel  = isempty(source.prefix) ? key :
+                   startswith(key, search_prefix) ? key[length(search_prefix)+1:end] : key
+            dest = joinpath(tmp_dir, replace(rel, '/' => Base.Filesystem.path_separator[1]))
+            mkpath(dirname(dest))
+            write(dest, IO._s3_get_bytes(source, key))
+        end
+        return _read_dataset_impl(IO.FileSystemMedia(tmp_dir); type=type)
+    finally
+        GC.gc()
+        rm(tmp_dir; recursive=true, force=true)
+    end
+end
+
+# Untyped public entry point — auto-resolves concrete type from data_info.json
+function read_dataset(source::IO.MinIOMedia; type::Symbol = :arrow)
+    loaded   = _read_dataset_impl(source; type=type)
+    info_key = IO._minio_key(source, _DATASET_INFO_FILE)
+
+    if loaded isa LoadedDataSet && IO._s3_exists(source, info_key)
+        info = JSON.parsefile(IOBuffer(IO._s3_get_bytes(source, info_key)))
+        if info isa AbstractDict && haskey(info, "dataset_type") &&
+                get(info, "__kind__", _DATASET_INFO_KIND) == _DATASET_INFO_KIND
+            try
+                declared = _dataset_resolve_type_from_name(string(info["dataset_type"]))
+                if declared <: iDataSet && Base.isconcretetype(declared)
+                    return _dataset_from_attributes(declared, loaded.attributes, nothing)
+                end
+            catch
+                # type not loaded in this session — return LoadedDataSet
+            end
+        end
+    end
+    return loaded
+end
+
+# Typed public entry point
+function read_dataset(::Type{T}, source::IO.MinIOMedia; type::Symbol = :arrow) where {T <: iDataSet}
+    loaded = _read_dataset_impl(source; type=type)
+    return _dataset_from_attributes(T, loaded.attributes, nothing)
+end
+
 function _dataset_to_json_value(value)
     if value === nothing
         return nothing

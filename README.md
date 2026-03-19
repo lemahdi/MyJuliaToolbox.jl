@@ -136,6 +136,129 @@ end
 
 For other inputs, `read_dataframe` accepts `DataFrame`s (returns the same object) and any `Tables.jl`-compatible table.
 
+---
+
+## MinIO / S3-compatible object store
+
+`MinIOMedia` extends the media interface to any S3-compatible object store — local [MinIO](https://min.io), AWS S3, Cloudflare R2, etc.
+
+### Prerequisites
+
+```julia
+pkg> add AWSS3 AWS
+```
+
+Start a local MinIO server (dev only):
+
+```bash
+docker compose -f docker-compose.minio.yml up -d
+# API: http://localhost:9000   Console: http://localhost:9001
+```
+
+### Connection
+
+```julia
+using AWSS3, AWS, MyJuliaToolbox
+
+media = MinIOMedia(
+    "my-bucket";
+    endpoint   = "http://localhost:9000",   # or your remote server
+    access_key = ENV["MINIO_ACCESS_KEY"],
+    secret_key = ENV["MINIO_SECRET_KEY"],
+    prefix     = "datasets/2025/q1",        # logical directory inside the bucket
+    format     = :arrow,                    # default format for DataFrame I/O
+)
+
+minio_create_bucket!(media)   # no-op if the bucket already exists
+```
+
+Credentials are resolved in this order: constructor arguments → `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` env vars → `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars.
+
+### DataFrame I/O
+
+```julia
+write_dataframe(media, "prices.arrow", df)
+write_dataframe(media, "prices.csv",   df; format=:csv, overwrite=true)
+
+df = read_dataframe(media, "prices.arrow")
+```
+
+Format is inferred from the file extension when `format=:auto` (the default).
+
+### Dataset I/O
+
+```julia
+# Write
+write_dataset(media, dataset)                        # Arrow (default)
+write_dataset(media, dataset; type=:csv, overwrite=true)
+
+# Read — typed
+dataset = read_dataset(MyDataSet, media)
+
+# Read — untyped (resolves concrete type from data_info.json automatically)
+dataset = read_dataset(media)
+```
+
+The full dataset structure — Arrow/CSV DataFrames, `data.json`, `data_info.json`, and nested `parameters/` files — is mirrored as S3 objects under `prefix/`.
+
+When `atomic=true` (default), a failed upload triggers best-effort deletion of already-uploaded objects so the bucket is not left in a partial state.
+
+### Parameter I/O
+
+```julia
+write_parameters(media, "config.json", params)
+write_parameters(media, "config.json", params, "subdir"; overwrite=true)
+
+params = read_parameters(MyParams, media, "config.json")
+params = read_parameters(MyParams, media, "config.json", "subdir")
+```
+
+### Async logging
+
+MinIO has no native append — records are buffered in memory and flushed as a single JSONL object per batch.
+
+```julia
+logger = AsyncLogger(media; min_level=:info)
+log_info!(logger, "pipeline started"; metadata=(step="ingest",))
+log_warn!(logger, "slow query")
+stop_logger!(logger)
+
+minio_flush_log_buffer!(media)   # uploads one .jsonl object to {prefix}/logs/{date}/{ts}.jsonl
+```
+
+Pass `sink_kwargs=(batch_logs=false,)` to write one object per record instead.
+
+### Object management
+
+```julia
+minio_create_bucket!(media)          # create bucket if absent
+minio_list_objects(media)            # list all keys under media.prefix
+minio_flush_log_buffer!(media)       # flush buffered log records
+```
+
+### Security notes
+
+- **Never hardcode credentials** — use environment variables or a secrets manager.
+- In production, run MinIO behind a reverse proxy (nginx / Traefik) with a **valid TLS certificate** and keep `tls_verify=true` (the default). Only set `tls_verify=false` against self-signed dev certs.
+- Create per-application **service accounts** in the MinIO console with least-privilege bucket policies rather than using the root credentials.
+
+### Running MinIO tests
+
+```bash
+# Start the server, then:
+julia --project=. -e 'using Pkg; Pkg.test()'
+
+# Override defaults with env vars:
+MINIO_TEST_ENDPOINT=http://localhost:9000 \
+MINIO_TEST_ACCESS_KEY=minioadmin \
+MINIO_TEST_SECRET_KEY=minioadmin \
+julia --project=. -e 'using Pkg; Pkg.test()'
+```
+
+Tests are skipped automatically if the server is not reachable, so the standard test suite always passes without MinIO.
+
+---
+
 For more details, see the docstrings in `src/MyJuliaToolbox.jl` or build the documentation locally:
 
 ```bash
