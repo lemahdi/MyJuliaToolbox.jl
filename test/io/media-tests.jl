@@ -6,6 +6,7 @@ using DataFrames
 using CSV
 using Arrow
 using SQLite
+using XLSX
 
 @testset "Media tests" begin
     # Create temporary directory for test files
@@ -77,6 +78,45 @@ using SQLite
         source_auto = FileSystemMedia(temp_dir)
         df_auto = read_dataframe(source_auto, "test.arrow")
         @test nrow(df_auto) == 5
+    end
+
+    @testset "FileSystemMedia - Excel (.xlsx)" begin
+        xlsx_path = joinpath(temp_dir, "test.xlsx")
+        XLSX.writetable(xlsx_path, collect(eachcol(test_df)), names(test_df))
+
+        # Test read via FileSystemMedia
+        source = FileSystemMedia(temp_dir)
+        df = read_dataframe(source, "test.xlsx")
+        @test df isa DataFrame
+        @test nrow(df) == 5
+        @test ncol(df) == 4
+        @test string.(df.name) == test_df.name
+
+        # Test write via FileSystemMedia
+        write_dataframe(source, "written.xlsx", test_df)
+        df_written = read_dataframe(source, "written.xlsx")
+        @test nrow(df_written) == 5
+        @test string.(df_written.name) == test_df.name
+
+        # Test write with explicit format=:excel
+        source_excel = FileSystemMedia(temp_dir, format=:excel)
+        write_dataframe(source_excel, "written_fmt.xlsx", test_df)
+        df_fmt = read_dataframe(source_excel, "written_fmt.xlsx")
+        @test nrow(df_fmt) == 5
+
+        # Test write with custom sheet name and read it back
+        write_dataframe(source, "sheeted.xlsx", test_df; sheet="People")
+        df_sheet = read_dataframe(source, "sheeted.xlsx"; sheet="People")
+        @test nrow(df_sheet) == 5
+
+        # Test overwrite protection
+        @test_throws ArgumentError write_dataframe(source, "written.xlsx", test_df)
+        write_dataframe(source, "written.xlsx", test_df; overwrite=true)
+        @test nrow(read_dataframe(source, "written.xlsx")) == 5
+
+        # Test that .xls throws an error
+        @test_throws ArgumentError read_dataframe(joinpath(temp_dir, "legacy.xls"))
+        @test_throws ArgumentError write_dataframe(joinpath(temp_dir, "legacy.xls"), test_df)
     end
     
     # ==================================================================
