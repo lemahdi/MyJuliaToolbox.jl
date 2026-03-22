@@ -235,7 +235,7 @@ function _parameters_from_url(::Type{T}, url::AbstractString) where {T <: iParam
 end
 
 function _parameter_to_json_value(value)
-    if value isa iParameters
+    if value isa iParameters || (isstructtype(typeof(value)) && value !== nothing && !(value isa Number) && !(value isa AbstractString) && !(value isa AbstractVector) && !(value isa AbstractDict))
         payload = Dict{String,Any}()
         for field_name in fieldnames(typeof(value))
             payload[string(field_name)] = _parameter_to_json_value(getfield(value, field_name))
@@ -313,6 +313,10 @@ function _convert_value(::Type{T}, value) where {T}
     end
 
     return convert(T, value)
+end
+
+function _convert_value(::Type{Any}, value)
+    return value
 end
 
 function _convert_value(::Type{Union{Nothing, S}}, value) where {S}
