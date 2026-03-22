@@ -5,6 +5,7 @@ using DataFrames
 using Arrow
 using Tables
 using CodecZlib
+using XLSX
 
 # Import iSourceMedia types from media.jl (will be included after this file)
 # We'll add methods after media.jl is loaded
@@ -36,10 +37,12 @@ end
 Factory to read various input types into a `DataFrame`.
 
 Supported inputs:
-- `path::AbstractString` — dispatched by file extension (`.csv`, `.tsv` => CSV; `.arrow` => Arrow). If `format==:auto` it will try Arrow then CSV for unknown extensions.
+- `path::AbstractString` — dispatched by file extension (`.csv`, `.tsv` => CSV; `.arrow` => Arrow; `.xlsx` => Excel). If `format==:auto` it will try Arrow then CSV for unknown extensions.
 - `df::DataFrame` — returns the same object.
 - `tbl` — any Tables.jl-compatible table — converts to `DataFrame(tbl)`.
 - `io::IO` — use `format` keyword to specify `:csv` or `:arrow`, or `:auto` to try Arrow then CSV.
+
+For Excel (`.xlsx`) files, pass `sheet` (sheet name or 1-based index, default `1`) to select a sheet.
 """
 function read_dataframe(df::DataFrame; format::Symbol = :auto, kwargs...)
     return df
@@ -90,6 +93,16 @@ function read_dataframe(path::AbstractString; format::Symbol = :auto, kwargs...)
             throw(ArgumentError("Gzipped Arrow files are not supported; please provide an uncompressed .arrow file"))
         end
         return read_arrow_to_df(path; kwargs...)
+    elseif format == :excel || ext == ".xlsx"
+        if is_gz
+            throw(ArgumentError("Gzipped Excel files are not supported; please provide an uncompressed .xlsx file"))
+        end
+        kwargs_dict = Dict(kwargs)
+        sheet = get(kwargs_dict, :sheet, 1)
+        remaining_kwargs = filter(kv -> kv[1] != :sheet, kwargs_dict)
+        return DataFrame(XLSX.readtable(path, sheet; remaining_kwargs...))
+    elseif ext == ".xls"
+        throw(ArgumentError("Legacy .xls format is not supported; please convert to .xlsx"))
     else
         # try Arrow first, then CSV
         try
@@ -144,11 +157,13 @@ end
 
 Write `df::DataFrame` to `path_or_io`.
 - If `path_or_io` is a *path* (string), the format is inferred from the file extension
-  (`.csv`, `.tsv`, `.txt` → CSV; `.arrow`, `.feather` → Arrow) unless `format` is provided.
+  (`.csv`, `.tsv`, `.txt` → CSV; `.arrow`, `.feather` → Arrow; `.xlsx` → Excel) unless `format` is provided.
   By default `atomic=true`: data is written to a temporary file in the same directory and
   then renamed into place (safer against partial writes). Use `overwrite=true` to allow
   replacing an existing file. Set `atomic=false` to opt out of atomic writes.
 - If an IO object is provided, you must specify `format` when it cannot be inferred.
+
+For Excel (`.xlsx`) files, pass `sheet` to specify the sheet name (default `"Sheet1"`).
 """
 function _has_enum_columns(df::DataFrame)
     return any(col -> Base.nonmissingtype(eltype(col)) <: Enum, eachcol(df))
@@ -224,8 +239,16 @@ function write_dataframe(path::AbstractString, df::DataFrame; format::Symbol = :
                     throw(ArgumentError("Gzipped Arrow writing is not supported; write to uncompressed .arrow files"))
                 end
                 Arrow.write(tmp_path, _normalize_enum_columns_for_arrow(df); kwargs...)
+            elseif format == :excel || ext == ".xlsx"
+                if is_gz
+                    throw(ArgumentError("Gzipped Excel writing is not supported; write to uncompressed .xlsx files"))
+                end
+                sheet = string(get(kwargs, :sheet, "Sheet1"))
+                XLSX.writetable(tmp_path, collect(eachcol(df)), names(df); sheetname=sheet)
+            elseif ext == ".xls"
+                throw(ArgumentError("Legacy .xls format is not supported for writing; use .xlsx instead"))
             else
-                throw(ArgumentError("Unsupported file extension for writing: $ext; specify format=:csv or format=:arrow"))
+                throw(ArgumentError("Unsupported file extension for writing: $ext; specify format=:csv, format=:arrow, or format=:excel"))
             end
             _finalize_temp(tmp_path)
         catch err
@@ -256,8 +279,16 @@ function write_dataframe(path::AbstractString, df::DataFrame; format::Symbol = :
                 throw(ArgumentError("Gzipped Arrow writing is not supported; write to uncompressed .arrow files"))
             end
             Arrow.write(path, _normalize_enum_columns_for_arrow(df); kwargs...)
+        elseif format == :excel || ext == ".xlsx"
+            if is_gz
+                throw(ArgumentError("Gzipped Excel writing is not supported; write to uncompressed .xlsx files"))
+            end
+            sheet = string(get(kwargs, :sheet, "Sheet1"))
+            XLSX.writetable(path, collect(eachcol(df)), names(df); sheetname=sheet)
+        elseif ext == ".xls"
+            throw(ArgumentError("Legacy .xls format is not supported for writing; use .xlsx instead"))
         else
-            throw(ArgumentError("Unsupported file extension for writing: $ext; specify format=:csv or format=:arrow"))
+            throw(ArgumentError("Unsupported file extension for writing: $ext; specify format=:csv, format=:arrow, or format=:excel"))
         end
     end
 
