@@ -9,6 +9,7 @@
 #   AWSS3 = "1c724243-ef5b-5fd7-8eda-4d50c531a078"
 #   AWS   = "fbe9abb3-538b-5e4e-ba9e-0f9b42bc2d2e"
 
+import AWS
 using Arrow
 using CSV
 using DataFrames
@@ -46,10 +47,9 @@ Implements the three abstract methods that AWS.jl dispatches on:
 - `AWS.credentials(cfg)`
 - `AWS.generate_service_url(cfg, service, resource)`
 
-These are registered lazily when MinIOMedia is first constructed (so that AWSS3
-is not a hard load-time dependency of the package).
+They are defined below, once, at load time.
 """
-mutable struct _MinIOAWSConfig
+mutable struct _MinIOAWSConfig <: AWS.AbstractAWSConfig
     endpoint::String    # e.g. "http://localhost:9000" or "https://minio.example.com"
     region::String      # MinIO ignores region, but AWS SDK requires a value
     credentials::Any    # AWS.AWSCredentials
@@ -58,21 +58,14 @@ mutable struct _MinIOAWSConfig
         new(rstrip(endpoint, '/'), region, credentials)
 end
 
-# Called once per MinIOMedia construction to wire in the AWS.jl extension points.
-# Safe to call multiple times (eval is idempotent for these method definitions).
-function _register_minio_aws_hooks!()
-    aws_mod = try Base.require(Main, :AWS) catch; return end
+# The AWS.jl extension points, which route every S3 call to the configured endpoint. They are defined at load
+# time: methods added while a MinIOMedia is constructed would be invisible to the task that goes on to use it.
+AWS.region(cfg::_MinIOAWSConfig) = cfg.region
+AWS.credentials(cfg::_MinIOAWSConfig) = cfg.credentials
 
-    @eval begin
-        $aws_mod.region(cfg::_MinIOAWSConfig) = cfg.region
-        $aws_mod.credentials(cfg::_MinIOAWSConfig) = cfg.credentials
-
-        # `resource` is already the "/bucket/key" path portion.
-        function $aws_mod.generate_service_url(cfg::_MinIOAWSConfig, ::String, resource::String)
-            return string(cfg.endpoint, resource)
-        end
-    end
-end
+# `resource` is already the "/bucket/key" path portion.
+AWS.generate_service_url(cfg::_MinIOAWSConfig, ::String, resource::String) =
+    string(cfg.endpoint, resource)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # MinIOMedia
@@ -136,7 +129,6 @@ struct MinIOMedia <: iSourceMedia
         tls_verify::Bool   = true,
     )
         _require_awss3()
-        _register_minio_aws_hooks!()
 
         isempty(access_key) && throw(ArgumentError(
             "MinIOMedia: access_key is empty. " *
@@ -198,13 +190,13 @@ end
 
 function _s3_get_bytes(media::MinIOMedia, key::String)::Vector{UInt8}
     awss3 = Base.require(Main, :AWSS3)
-    return awss3.s3_get(media._config, media.bucket, key)
+    return awss3.s3_get(media._config, media.bucket, key; raw = true)
 end
 
 function _s3_put_bytes(media::MinIOMedia, key::String, data::Vector{UInt8};
                         content_type::String = "application/octet-stream")
     awss3 = Base.require(Main, :AWSS3)
-    awss3.s3_put(media._config, media.bucket, key, data; content_type)
+    awss3.s3_put(media._config, media.bucket, key, data, content_type)
     return nothing
 end
 
@@ -364,7 +356,7 @@ No-op if the bucket is already present.
 """
 function minio_create_bucket!(media::MinIOMedia)
     awss3 = Base.require(Main, :AWSS3)
-    awss3.s3_bucket_exists(media._config, media.bucket) ||
+    media.bucket in awss3.s3_list_buckets(media._config) ||
         awss3.s3_create_bucket(media._config, media.bucket)
     return nothing
 end
