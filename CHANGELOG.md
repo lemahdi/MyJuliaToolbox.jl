@@ -23,7 +23,9 @@
 - Moved `parameters_locator` from `FileSystemMedia` to `SQLDumpMedia`.
 - Updated `read_parameters` for `FileSystemMedia` to use `source.path` directly.
 - Updated README examples to show `parameters_locator` usage for database media sources.
+- Arrow writes (`write_dataframe`, and `write_dataset` to files or MinIO) turn text held in string types other than `String` into `String`, as they already turned enums into text: a column mixing `String` and `SubString` was written as an Arrow union.
 
 ### Tests
 - Added constructor field coverage for `parameters_locator` in media tests.
 - Added parameter-reading tests covering filesystem locator, database locator, and missing-locator error handling.
+- Added an Arrow test for columns of text in other string types (a mix of `String` and `SubString`, with and without `missing`).

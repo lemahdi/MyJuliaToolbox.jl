@@ -169,8 +169,24 @@ function _has_enum_columns(df::DataFrame)
     return any(col -> Base.nonmissingtype(eltype(col)) <: Enum, eachcol(df))
 end
 
+"""Return true when `column` holds text in a string type other than `String`, such as a mix of `String` and `SubString` that Arrow writes as a union."""
+function _is_non_string_text_column(column::AbstractVector)
+    value_type = Base.nonmissingtype(eltype(column))
+    return value_type !== Union{} && value_type <: AbstractString && value_type !== String
+end
+
+"""Return `column`'s text as `String`, keeping `missing`."""
+function _plain_text_column(column::AbstractVector)
+    plain_type = Missing <: eltype(column) ? Union{Missing,String} : String
+    return Vector{plain_type}(column)
+end
+
+"""
+Return `df` ready for Arrow: enum columns become text, and text held in string types other than `String`
+(a mix of `String` and `SubString` would be written as a union) becomes `String`. `df` itself is not changed.
+"""
 function _normalize_enum_columns_for_arrow(df::DataFrame)
-    if !_has_enum_columns(df)
+    if !_has_enum_columns(df) && !any(_is_non_string_text_column, eachcol(df))
         return df
     end
 
@@ -179,6 +195,8 @@ function _normalize_enum_columns_for_arrow(df::DataFrame)
         column = normalized[!, column_name]
         if Base.nonmissingtype(eltype(column)) <: Enum
             normalized[!, column_name] = [ismissing(value) ? missing : string(value) for value in column]
+        elseif _is_non_string_text_column(column)
+            normalized[!, column_name] = _plain_text_column(column)
         end
     end
     return normalized

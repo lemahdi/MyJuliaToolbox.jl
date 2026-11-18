@@ -41,4 +41,33 @@ using Arrow
         @test df_out.id == df_enum.id
         @test isequal(df_out.status, Union{Missing,String}["PENDING", missing, "DONE"])
     end
+
+    @testset "Arrow write turns text of other string types into String" begin
+        df_text = DataFrame(
+            mixed = Union{String,SubString{String}}["a", SubString("bcd", 1, 2), "e"],
+            mixed_missing = Union{Missing,String,SubString{String}}[missing, "x", SubString("yz", 2, 2)],
+            substrings = [SubString("hello", 1, 1), SubString("world", 2, 3), SubString("ab", 2, 2)],
+            plain = ["p", "q", "r"],
+            all_missing = [missing, missing, missing],
+        )
+
+        farrow = tempname() * ".arrow"
+        write_dataframe(farrow, df_text, overwrite=true)
+
+        table = Arrow.Table(farrow)
+        for column_name in (:mixed, :mixed_missing, :substrings, :plain)
+            @test !(getproperty(table, column_name) isa Arrow.DenseUnion)
+        end
+        @test eltype(table.mixed) == String
+        @test eltype(table.mixed_missing) == Union{Missing,String}
+        @test eltype(table.substrings) == String
+        @test eltype(table.plain) == String
+
+        df_out = read_dataframe(farrow)
+        @test df_out.mixed == ["a", "bc", "e"]
+        @test isequal(df_out.mixed_missing, [missing, "x", "z"])
+        @test df_out.substrings == ["h", "or", "b"]
+        @test all(ismissing, df_out.all_missing)
+        @test eltype(df_text.mixed) == Union{String,SubString{String}}
+    end
 end
