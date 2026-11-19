@@ -179,11 +179,13 @@ Credentials are resolved in this order: constructor arguments → `MINIO_ACCESS_
 ```julia
 write_dataframe(media, "prices.arrow", df)
 write_dataframe(media, "prices.csv",   df; format=:csv, overwrite=true)
+write_dataframe(media, df; filename="prices.xlsx")
 
 df = read_dataframe(media, "prices.arrow")
+df = read_dataframe(media; filename="prices.xlsx")
 ```
 
-Format is inferred from the file extension when `format=:auto` (the default).
+An object holds what a local file of the same name holds: each call goes through `write_dataframe(path)` or `read_dataframe(path)` on a temporary file, so the formats (CSV, TSV, gzipped CSV, Arrow, Feather, Excel), their inference from the extension and the bytes are those of a `FileSystemMedia`. An Arrow object is in the Arrow file format, so a reader such as pyarrow's datasets reads it from its footer. The `format` keyword wins over the media's `format`, as for a `FileSystemMedia`; `atomic` is accepted (an object is put whole or not at all). Without `filename`, the object is the one whose key is the media's prefix.
 
 ### Dataset I/O
 
@@ -226,7 +228,7 @@ stop_logger!(logger)
 minio_flush_log_buffer!(media)   # uploads one .jsonl object to {prefix}/logs/{date}/{ts}.jsonl
 ```
 
-Pass `sink_kwargs=(batch_logs=false,)` to write one object per record instead.
+Pass `batch_logs=false` (`AsyncLogger(media; batch_logs=false)`, one of the sink options `AsyncLogger` hands to the sink) to write one object per record instead.
 
 ### Object management
 

@@ -173,15 +173,40 @@ function _minio_key(media::MinIOMedia, relative_path::String)
     return "$(media.prefix)/$(lstrip(rel, '/'))"
 end
 
-function _minio_infer_format(filename::String, default::Symbol)
-    default != :auto && return default
-    lf = lowercase(filename)
-    endswith(lf, ".arrow")  && return :arrow
-    endswith(lf, ".csv")    && return :csv
-    endswith(lf, ".csv.gz") && return :csv
-    throw(ArgumentError(
-        "Cannot infer format from \"$filename\". " *
-        "Pass format=:arrow or format=:csv explicitly, or rename the file."))
+"""
+    _minio_object_key(media, filename) -> String
+
+The key of the object a data frame call names: `filename` under the media's prefix; without `filename` (`nothing`),
+the prefix itself, as a `FileSystemMedia` without `filename` names its own path.
+"""
+function _minio_object_key(media::MinIOMedia, filename::Union{AbstractString, Nothing})
+    isnothing(filename) || return _minio_key(media, String(filename))
+    isempty(media.prefix) && throw(ArgumentError(
+        "MinIOMedia: no filename and an empty prefix; pass filename=<name> or a prefix naming the object"))
+    return media.prefix
+end
+
+"""
+    _minio_object_name(key) -> String
+
+The last part of an object's key: the name a local file holding the object gets, whose extension gives the format.
+"""
+_minio_object_name(key::AbstractString) = String(last(split(replace(key, '\\' => '/'), '/')))
+
+"""
+    _minio_content_type(filename) -> String
+
+The content type an object gets from its name's extension.
+"""
+function _minio_content_type(filename::AbstractString)
+    name = lowercase(filename)
+    endswith(name, ".gz") && return "application/gzip"
+    any(extension -> endswith(name, extension), (".arrow", ".feather")) && return "application/vnd.apache.arrow.file"
+    any(extension -> endswith(name, extension), (".csv", ".txt")) && return "text/csv"
+    endswith(name, ".tsv") && return "text/tab-separated-values"
+    endswith(name, ".xlsx") && return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    endswith(name, ".json") && return "application/json"
+    return "application/octet-stream"
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -211,55 +236,114 @@ function _s3_list_keys(media::MinIOMedia, prefix::String)::Vector{String}
     return [string(o["Key"]) for o in objects]
 end
 
+"""Delete the object `key` from the media's bucket."""
+function _s3_delete(media::MinIOMedia, key::String)
+    awss3 = Base.require(Main, :AWSS3)
+    awss3.s3_delete(media._config, media.bucket, key)
+    return nothing
+end
+
 # ──────────────────────────────────────────────────────────────────────────────
 # DataFrame I/O
 # ──────────────────────────────────────────────────────────────────────────────
 
-"""
-    read_dataframe(media::MinIOMedia, filename; format=:auto, kwargs...) -> DataFrame
+# A MinIO object holds what a local file of the same name holds: each call goes through `read_dataframe(path)` or
+# `write_dataframe(path)` on a temporary file, so the formats, their inference from the extension and the bytes are
+# those of a `FileSystemMedia` (an Arrow object is in the Arrow file format, readable from its footer).
 
-Download `filename` from the MinIO bucket and deserialise it as a DataFrame.
-Format is inferred from the file extension unless overridden.
 """
-function read_dataframe(media::MinIOMedia, filename::AbstractString;
-                         format::Symbol = :auto, kwargs...)
-    key  = _minio_key(media, String(filename))
-    fmt  = _minio_infer_format(String(filename),
-                                media.format == :auto ? format : media.format)
-    data = _s3_get_bytes(media, key)
-    # Call Arrow/CSV directly to avoid LSP ambiguity with the Base.IO overloads.
-    if fmt == :arrow
-        return DataFrame(Arrow.Table(IOBuffer(data); kwargs...))
-    else
-        return CSV.read(IOBuffer(data), DataFrame; kwargs...)
+    _dataframe_bytes(filename, df; format, kwargs...) -> Vector{UInt8}
+
+The bytes `write_dataframe(path, df)` writes into a local file named `filename`, written in a temporary folder.
+"""
+function _dataframe_bytes(filename::String, df::DataFrame; format::Symbol, kwargs...)
+    folder = mktempdir()
+    try
+        path = joinpath(folder, filename)
+        write_dataframe(path, df; format = format, overwrite = true, atomic = false, kwargs...)
+        return read(path)
+    finally
+        rm(folder; recursive = true, force = true)
     end
 end
 
 """
-    write_dataframe(media::MinIOMedia, filename, df; format=:auto, overwrite=false, kwargs...)
+    _dataframe_from_bytes(filename, data; format, kwargs...) -> DataFrame
 
-Serialise `df` in-memory and upload it as `filename` to the MinIO bucket.
-Raises `ArgumentError` if the object already exists and `overwrite=false`.
+The data frame `read_dataframe(path)` reads from a local file named `filename` holding `data`, in a temporary folder.
 """
-function write_dataframe(media::MinIOMedia, filename::AbstractString, df::DataFrame;
-                          format::Symbol = :auto,
-                          overwrite::Bool = false,
-                          kwargs...)
-    key = _minio_key(media, String(filename))
-    fmt = _minio_infer_format(String(filename),
-                               media.format == :auto ? format : media.format)
+function _dataframe_from_bytes(filename::String, data::Vector{UInt8}; format::Symbol, kwargs...)
+    folder = mktempdir()
+    try
+        path = joinpath(folder, filename)
+        write(path, data)
+        return read_dataframe(path; format = format, kwargs...)
+    finally
+        GC.gc()
+        rm(folder; recursive = true, force = true)
+    end
+end
 
+"""
+    read_dataframe(media::MinIOMedia, filename; format=media.format, kwargs...) -> DataFrame
+
+Download `filename` from the media's prefix and read it as `read_dataframe(path)` reads a local file of that name:
+the same formats (CSV, TSV, gzipped CSV, Arrow, Feather, Excel), inferred from the extension unless `format` says.
+"""
+function read_dataframe(media::MinIOMedia, filename::AbstractString; format::Symbol = media.format, kwargs...)
+    key = _minio_object_key(media, filename)
+    return _dataframe_from_bytes(_minio_object_name(key), _s3_get_bytes(media, key); format = format, kwargs...)
+end
+
+"""
+    read_dataframe(media::MinIOMedia; filename=nothing, format=media.format, kwargs...) -> DataFrame
+
+As `read_dataframe(::FileSystemMedia; filename)`: the object `filename` names under the prefix; without `filename`,
+the object whose key is the prefix.
+"""
+function read_dataframe(media::MinIOMedia; filename::Union{AbstractString, Nothing} = nothing,
+                        format::Symbol = media.format, kwargs...)
+    key = _minio_object_key(media, filename)
+    return _dataframe_from_bytes(_minio_object_name(key), _s3_get_bytes(media, key); format = format, kwargs...)
+end
+
+"""
+    write_dataframe(media::MinIOMedia, filename, df; format=media.format, overwrite=false, atomic=true, kwargs...)
+
+Write `df` as `write_dataframe(path, df)` writes a local file of that name, then upload it as `filename` under the
+media's prefix. Raises `ArgumentError` if the object already exists and `overwrite=false`. `atomic` is accepted as for
+a file: an object is put whole or not at all.
+"""
+function write_dataframe(media::MinIOMedia, filename::AbstractString, df::DataFrame; format::Symbol = media.format,
+                         overwrite::Bool = false, atomic::Bool = true, kwargs...)
+    return _write_object(media, _minio_object_key(media, filename), df; format = format, overwrite = overwrite,
+                         kwargs...)
+end
+
+"""
+    write_dataframe(media::MinIOMedia, df; filename=nothing, format=media.format, overwrite=false, atomic=true, kwargs...)
+
+As `write_dataframe(::FileSystemMedia, df; filename)`: the object `filename` names under the prefix; without
+`filename`, the object whose key is the prefix.
+"""
+function write_dataframe(media::MinIOMedia, df::DataFrame; filename::Union{AbstractString, Nothing} = nothing,
+                         format::Symbol = media.format, overwrite::Bool = false, atomic::Bool = true, kwargs...)
+    return _write_object(media, _minio_object_key(media, filename), df; format = format, overwrite = overwrite,
+                         kwargs...)
+end
+
+"""
+    _write_object(media, key, df; format, overwrite, kwargs...)
+
+Upload `df` under `key` with the bytes a local file of the key's name would hold; refuses an existing object unless
+`overwrite`.
+"""
+function _write_object(media::MinIOMedia, key::String, df::DataFrame; format::Symbol, overwrite::Bool, kwargs...)
     !overwrite && _s3_exists(media, key) && throw(ArgumentError(
         "Object already exists: $key. Pass overwrite=true to overwrite."))
-
-    buf = IOBuffer()
-    if fmt == :arrow
-        Arrow.write(buf, _normalize_enum_columns_for_arrow(df); kwargs...)
-    else
-        CSV.write(buf, df; kwargs...)
-    end
-    content_type = fmt == :arrow ? "application/vnd.apache.arrow.stream" : "text/csv"
-    _s3_put_bytes(media, key, take!(buf); content_type)
+    name = _minio_object_name(key)
+    _s3_put_bytes(media, key, _dataframe_bytes(name, df; format = format, kwargs...);
+                  content_type = _minio_content_type(name))
     return nothing
 end
 

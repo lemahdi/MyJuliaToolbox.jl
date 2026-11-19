@@ -24,8 +24,16 @@
 - Updated `read_parameters` for `FileSystemMedia` to use `source.path` directly.
 - Updated README examples to show `parameters_locator` usage for database media sources.
 - Arrow writes (`write_dataframe`, and `write_dataset` to files or MinIO) turn text held in string types other than `String` into `String`, as they already turned enums into text: a column mixing `String` and `SubString` was written as an Arrow union.
+- `MinIOMedia` reads and writes data frames as a `FileSystemMedia` does: each `read_dataframe` and `write_dataframe` goes through the path functions on a temporary file, so an object holds what a local file of its name holds. `write_dataframe`'s Arrow object is now in the Arrow file format (it was an Arrow stream, which readers such as pyarrow's datasets refuse; `write_dataset` already wrote Arrow files, through a temporary folder); gzipped CSV, Feather and Excel objects work, and a TSV object holds what the file functions write (commas: they write a `.tsv` file so, a file-system behaviour left as it is); the `format` keyword wins over the media's `format`; `atomic` is accepted; `filename` may be given as a keyword, and without it the object is the one whose key is the prefix. Objects written before as Arrow streams are still read.
+- `read_dataset` on a `MinIOMedia` downloads the prefix to a temporary folder and reads it as `read_dataset(::FileSystemMedia)` reads a folder, typed or not: a dataset with an `iParameters` field failed ("Missing attribute"), and every untyped read failed (`JSON.parsefile` given an `IOBuffer`). As for a folder, an untyped read of a type that cannot be resolved is refused (it gave a `LoadedDataSet`).
+- Objects get their content type from their name's extension (`application/vnd.apache.arrow.file` for Arrow), in `write_dataframe` and `write_dataset`.
+
+### Fixed
+- `MinIOMedia`: `_s3_delete` was called but not defined, so `write_dataset`'s clean-up after a failed upload (`atomic=true`) deleted nothing, nor did the MinIO tests' clean-up; it now removes the objects.
+- README and the MinIO logger test passed `sink_kwargs=(batch_logs=false,)`, which `AsyncLogger` hands to the sink as one option named `sink_kwargs` (records stayed batched); they pass `batch_logs=false`.
 
 ### Tests
+- MinIO: an object holds what a local file of its name holds (offline: Arrow file byte for byte, the `format` keyword, gzipped CSV, TSV, Excel, an Arrow stream still read, an unknown extension refused, content types, the object a call names); with a server: the same through MinIO, `filename` as a keyword and the prefix as the object, `_s3_delete`, `write_dataset`'s tables as Arrow files. The MinIO tests name the toolbox's internals `MyJuliaToolbox.IO` (`IO` alone is Base's).
 - Added constructor field coverage for `parameters_locator` in media tests.
 - Added parameter-reading tests covering filesystem locator, database locator, and missing-locator error handling.
 - Added an Arrow test for columns of text in other string types (a mix of `String` and `SubString`, with and without `missing`).
