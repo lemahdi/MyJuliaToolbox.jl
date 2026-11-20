@@ -14,7 +14,7 @@ include("io/logger.jl")
 # Include read_dataframe extensions for iSourceMedia types
 include("io/media_dataframes.jl")
 
-# MinIO / S3-compatible media backend (optional — requires AWSS3.jl + AWS.jl)
+# MinIO / S3-compatible media backend (AWSS3.jl and AWS.jl, MyJuliaToolbox's own dependencies)
 include("io/media_minio.jl")
 
 end # module IO

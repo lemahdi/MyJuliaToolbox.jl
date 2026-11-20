@@ -179,11 +179,13 @@ Credentials are resolved in this order: constructor arguments → `MINIO_ACCESS_
 ```julia
 write_dataframe(media, "prices.arrow", df)
 write_dataframe(media, "prices.csv",   df; format=:csv, overwrite=true)
+write_dataframe(media, df; filename="prices.xlsx")
 
 df = read_dataframe(media, "prices.arrow")
+df = read_dataframe(media; filename="prices.xlsx")
 ```
 
-Format is inferred from the file extension when `format=:auto` (the default).
+An object holds what a local file of the same name holds: each call goes through `write_dataframe(path)` or `read_dataframe(path)` on a temporary file, so the formats (CSV, TSV, gzipped CSV, Arrow, Feather, Excel), their inference from the extension and the bytes are those of a `FileSystemMedia`. An Arrow object is in the Arrow file format, so a reader such as pyarrow's datasets reads it from its footer. The `format` keyword wins over the media's `format`, as for a `FileSystemMedia`; `atomic` is accepted (an object is put whole or not at all). Without `filename`, the object is the one whose key is the media's prefix.
 
 ### Dataset I/O
 
@@ -226,7 +228,7 @@ stop_logger!(logger)
 minio_flush_log_buffer!(media)   # uploads one .jsonl object to {prefix}/logs/{date}/{ts}.jsonl
 ```
 
-Pass `sink_kwargs=(batch_logs=false,)` to write one object per record instead.
+Pass `batch_logs=false` (`AsyncLogger(media; batch_logs=false)`, one of the sink options `AsyncLogger` hands to the sink) to write one object per record instead.
 
 ### Object management
 
@@ -256,6 +258,50 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
 Tests are skipped automatically if the server is not reachable, so the standard test suite always passes without MinIO.
+
+## Pipeline runs (Mykonos)
+
+A pipeline reads its landing tables, runs its steps, sets each output table inside a step, and ends by writing the run. The run's log is a plain `Dict{String, Any}` in the Dataset Tower's standard (`mykonos.steps.v1`); it is written as `steps.json` in the run's prefix of the pipeline zone at each step's start and end, beside the dataset (`dataset/`).
+
+```julia
+# pipeline.jl, at the root of the pipeline's repository
+using MyJuliaToolbox: FileSystemMedia, open_zones, read_landing, read_parameters, run_step, write_run
+using RsuPipeline
+
+zones = open_zones()                     # the landing zone and this run's prefix, from the variables S6 sets
+run_log = Dict{String, Any}()
+dataset = RSUDataSet()
+dataset.parameters = read_parameters(RSUParameters, FileSystemMedia(@__DIR__; format = :arrow),
+                                     "rsu_parameters.json", "parameters")
+run_step(run_log, zones, ingest!, dataset, read_landing(zones))
+run_step(run_log, zones, preprocess!, dataset)
+run_step(run_log, zones, compute!, dataset)
+write_run(run_log, zones, dataset)       # write_dataset into dataset/, then steps.json done
+```
+
+```julia
+# A step gets the log after the dataset and sets its outputs through it.
+using MyJuliaToolbox: set_output!
+
+"""Compute the scores from the preprocessed tables."""
+function compute!(dataset::RSUDataSet, run_log::Dict{String, Any})
+    score_table = score_from(dataset.preprocessed_df)
+    set_output!(dataset, run_log, :score_df, score_table)
+    return dataset
+end
+```
+
+| Variable `open_zones` reads | Holds |
+|---|---|
+| `MYKONOS_OBJECT_ENDPOINT` | MinIO's address |
+| `MYKONOS_LANDING_STORE`, `MYKONOS_PIPELINE_STORE` | The landing zone and the pipeline zone, `s3://<bucket>/<prefix>` |
+| `MYKONOS_DATASET_UID`, `MYKONOS_RUN_UID` | The run's prefix: `<pipeline prefix>/<dataset UID>/<run UID>` |
+| `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` | The key the process reaches MinIO with |
+
+- **Names.** A step is named after its function without the trailing `!` (`compute!` gives `compute`); a table set in a helper belongs to the step that called it. A table is named after its field without a trailing `_df`. Names match `^[A-Za-z0-9_-]{1,128}$`.
+- **Landing tables.** `read_landing` reads `landing.json`, which S6 writes in the run's prefix (C10's answer for the dataset's landing zone), and stacks each table's parts in order.
+- **Refusals.** `run_step` refuses an anonymous function, a name used twice, a step while another runs, and a step after a failure. `set_output!` refuses a call outside a step, a field the dataset lacks, and a value that is not a `DataFrame`. `write_run` refuses a table with rows that no `set_output!` set, a table changed since its last set (a change needs a step), and two fields giving one table name.
+- **Failures.** A failing step, or a failing `write_run`, leaves `steps.json` `failed` with the error's text on one line, and the error is thrown again.
 
 ---
 

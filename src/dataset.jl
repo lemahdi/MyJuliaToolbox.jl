@@ -645,13 +645,7 @@ function _write_dataset_impl(source::IO.MinIOMedia, dataset::iDataSet;
                             "Object already exists: $key. Pass overwrite=true to overwrite."))
                     end
 
-                    content_type = if endswith(lowercase(fname), ".arrow")
-                        "application/vnd.apache.arrow.stream"
-                    elseif endswith(lowercase(fname), ".csv")
-                        "text/csv"
-                    else
-                        "application/json"
-                    end
+                    content_type = IO._minio_content_type(fname)
                     IO._s3_put_bytes(source, key, read(local_path); content_type)
                     push!(uploaded, key)
                 end
@@ -671,15 +665,13 @@ function _write_dataset_impl(source::IO.MinIOMedia, dataset::iDataSet;
 end
 
 """
-    _read_dataset_impl(source::IO.MinIOMedia; type=:arrow) -> LoadedDataSet
+    _with_downloaded_prefix(read_folder, source::IO.MinIOMedia)
 
-List all objects under `source.prefix`, download them to a temporary local
-directory, then delegate to `FileSystemMedia` logic to reconstruct the dataset.
+Download every object under `source.prefix` into a temporary folder, each at its path relative to the prefix, and
+return `read_folder(folder)`, called while the folder exists; the folder is removed after. Throws `ArgumentError` when
+the prefix holds no object.
 """
-function _read_dataset_impl(source::IO.MinIOMedia; type::Symbol = :arrow)
-    type in (:arrow, :csv) || throw(ArgumentError(
-        "Unsupported dataset type: $type. Supported: :arrow, :csv."))
-
+function _with_downloaded_prefix(read_folder::Function, source::IO.MinIOMedia)
     search_prefix = isempty(source.prefix) ? "" : source.prefix * "/"
     all_keys      = IO._s3_list_keys(source, search_prefix)
 
@@ -696,39 +688,49 @@ function _read_dataset_impl(source::IO.MinIOMedia; type::Symbol = :arrow)
             mkpath(dirname(dest))
             write(dest, IO._s3_get_bytes(source, key))
         end
-        return _read_dataset_impl(IO.FileSystemMedia(tmp_dir); type=type)
+        return read_folder(tmp_dir)
     finally
         GC.gc()
         rm(tmp_dir; recursive=true, force=true)
     end
 end
 
-# Untyped public entry point — auto-resolves concrete type from data_info.json
-function read_dataset(source::IO.MinIOMedia; type::Symbol = :arrow)
-    loaded   = _read_dataset_impl(source; type=type)
-    info_key = IO._minio_key(source, _DATASET_INFO_FILE)
-
-    if loaded isa LoadedDataSet && IO._s3_exists(source, info_key)
-        info = JSON.parsefile(IOBuffer(IO._s3_get_bytes(source, info_key)))
-        if info isa AbstractDict && haskey(info, "dataset_type") &&
-                get(info, "__kind__", _DATASET_INFO_KIND) == _DATASET_INFO_KIND
-            try
-                declared = _dataset_resolve_type_from_name(string(info["dataset_type"]))
-                if declared <: iDataSet && Base.isconcretetype(declared)
-                    return _dataset_from_attributes(declared, loaded.attributes, nothing)
-                end
-            catch
-                # type not loaded in this session — return LoadedDataSet
-            end
-        end
-    end
-    return loaded
+"""Refuse a dataset type other than `:arrow` and `:csv`, as the folder reads do."""
+function _check_dataset_type(type::Symbol)
+    type in (:arrow, :csv) || throw(ArgumentError("Unsupported dataset type: $type. Supported: :arrow, :csv."))
+    return nothing
 end
 
-# Typed public entry point
+"""
+    _read_dataset_impl(source::IO.MinIOMedia; type=:arrow) -> LoadedDataSet
+
+The objects under `source.prefix` downloaded to a temporary folder, then read as a `FileSystemMedia`.
+"""
+function _read_dataset_impl(source::IO.MinIOMedia; type::Symbol = :arrow)
+    _check_dataset_type(type)
+    return _with_downloaded_prefix(folder -> _read_dataset_impl(IO.FileSystemMedia(folder); type=type), source)
+end
+
+"""
+    read_dataset(source::IO.MinIOMedia; type=:arrow)
+
+Read the dataset under the media's prefix as `read_dataset(::FileSystemMedia)` reads a folder: the objects are
+downloaded to a temporary folder first, so the concrete type comes from `data_info.json` and each `iParameters` field
+from `parameters/`, as for a folder (a type that cannot be resolved is refused, as for a folder).
+"""
+function read_dataset(source::IO.MinIOMedia; type::Symbol = :arrow)
+    _check_dataset_type(type)
+    return _with_downloaded_prefix(folder -> read_dataset(IO.FileSystemMedia(folder); type=type), source)
+end
+
+"""
+    read_dataset(::Type{T}, source::IO.MinIOMedia; type=:arrow)
+
+Typed variant: the dataset under the media's prefix read as `read_dataset(T, ::FileSystemMedia)` reads a folder.
+"""
 function read_dataset(::Type{T}, source::IO.MinIOMedia; type::Symbol = :arrow) where {T <: iDataSet}
-    loaded = _read_dataset_impl(source; type=type)
-    return _dataset_from_attributes(T, loaded.attributes, nothing)
+    _check_dataset_type(type)
+    return _with_downloaded_prefix(folder -> read_dataset(T, IO.FileSystemMedia(folder); type=type), source)
 end
 
 function _dataset_to_json_value(value)

@@ -39,11 +39,13 @@ MyJuliaToolbox.jl/
 │   ├── utils/
 │   │   └── dates.jl              # date2int, int2date, yearfrac, add_days_convention
 │   ├── dataset.jl                # iDataSet, LoadedDataSet, read_dataset, write_dataset
+│   ├── pipeline.jl               # open_zones, read_landing, run_step, set_output!, write_run
 │   └── parameters.jl             # iParameters, read_parameters, write_parameters
 ├── test/
 │   ├── runtests.jl
 │   ├── io/                       # CSV, Arrow, factory, media, SQL dump, logger, dataset tests
 │   ├── parameters/
+│   ├── pipeline/                 # pipeline runs tests (offline; on MinIO when one answers)
 │   └── utils/
 ├── src/sandbox/
 │   ├── media/                    # Example scripts for FileSystemMedia and DatabaseMedia usage
@@ -176,6 +178,25 @@ Writes each `DataFrame` field as `<fieldname>.arrow` (or `.csv`), serializes all
 Supported sinks: `FileSystemMedia`, `ConsoleMedia`, `ArchiveMedia`.
 
 For `ArchiveMedia`: the dataset is first written to a temp directory, then packed into the archive. `atomic=true` (default) uses a `.tmp` file then renames to prevent partial archives.
+
+---
+
+### Pipeline runs (`src/pipeline.jl`)
+
+A Mykonos pipeline's steps, the tables they set, and the run's log (the Dataset Tower's standard `mykonos.steps.v1`), written as `steps.json` beside the dataset in the run's prefix of the pipeline zone.
+
+```julia
+open_zones(environment::AbstractDict = ENV) -> (landing = MinIOMedia, pipeline = MinIOMedia)
+read_landing(zones) -> Dict{String, DataFrame}            # names and part keys from landing.json
+run_step(run_log::Dict{String, Any}, zones, f::Function, dataset::iDataSet, args...; kwargs...)  # calls f(dataset, run_log, args...; kwargs...)
+set_output!(dataset::iDataSet, run_log::Dict{String, Any}, field::Symbol, table::DataFrame) -> dataset
+write_run(run_log::Dict{String, Any}, zones, dataset::iDataSet)   # write_dataset into dataset/, then steps.json done
+```
+
+- `open_zones` reads `MYKONOS_OBJECT_ENDPOINT`, `MYKONOS_LANDING_STORE`, `MYKONOS_PIPELINE_STORE` (stores as `s3://<bucket>/<prefix>`), `MYKONOS_DATASET_UID`, `MYKONOS_RUN_UID`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`; the run's prefix is `<pipeline prefix>/<dataset UID>/<run UID>`.
+- A step is named after its function without the trailing `!`; a table is named after its field without a trailing `_df`. Names match `^[A-Za-z0-9_-]{1,128}$`.
+- A table is set only inside a step; `write_run` refuses a table with rows that no `set_output!` set, or changed since its last set. A failing step, or a failing `write_run`, leaves `steps.json` `failed` with the error on one line, and the error is thrown again.
+- The functions also take zones made of `FileSystemMedia` folders (the tests use them).
 
 ---
 
