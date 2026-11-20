@@ -3,6 +3,10 @@ using Test
 using DataFrames
 using Arrow
 
+# At top level: an enum defined inside a @testset is not found by name on Julia's pre-release
+# (UndefVarError: `Status` not defined in `Main`).
+@enum ArrowTestStatus PENDING DONE
+
 @testset "Arrow tests" begin
     @testset "read_arrow_to_df and Arrow roundtrips" begin
         arrowfile = tempname() * ".arrow"
@@ -27,11 +31,9 @@ using Arrow
     end
 
     @testset "Arrow write supports enum columns" begin
-        @enum Status PENDING DONE
-
         df_enum = DataFrame(
             id = [1, 2, 3],
-            status = Union{Missing,Status}[PENDING, missing, DONE],
+            status = Union{Missing,ArrowTestStatus}[PENDING, missing, DONE],
         )
 
         farrow = tempname() * ".arrow"
