@@ -5,32 +5,16 @@
 # _write_dataset_impl, parameters_from_dict, etc.) live in src/minio_extensions.jl,
 # which is included at the MyJuliaToolbox top-level after both io.jl and dataset.jl.
 #
-# Required packages (add to Project.toml before using):
-#   AWSS3 = "1c724243-ef5b-5fd7-8eda-4d50c531a078"
-#   AWS   = "fbe9abb3-538b-5e4e-ba9e-0f9b42bc2d2e"
+# AWSS3 and AWS are MyJuliaToolbox's own dependencies (Project.toml): MinIOMedia uses them whatever the project that
+# loads MyJuliaToolbox lists.
 
 import AWS
+import AWSS3
 using Arrow
 using CSV
 using DataFrames
 using Dates
 using JSON
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Lazy-load guard
-# ──────────────────────────────────────────────────────────────────────────────
-function _require_awss3()
-    if !isdefined(Main, :AWSS3)
-        try
-            Base.require(Main, :AWSS3)
-        catch
-            throw(ArgumentError(
-                "MinIOMedia requires AWSS3.jl. Add it to your project:\n" *
-                "  pkg> add AWSS3\n  pkg> add AWS"
-            ))
-        end
-    end
-end
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Custom AWS config — wires a non-AWS endpoint into AWS.jl's request pipeline
@@ -98,7 +82,7 @@ An empty `prefix` stores objects directly at the bucket root.
 
 # Example
 ```julia
-using AWSS3, AWS, MyJuliaToolbox
+using MyJuliaToolbox
 
 media = MinIOMedia("analytics";
             endpoint   = "https://minio.example.com",
@@ -128,8 +112,6 @@ struct MinIOMedia <: iSourceMedia
         format::Symbol     = :auto,
         tls_verify::Bool   = true,
     )
-        _require_awss3()
-
         isempty(access_key) && throw(ArgumentError(
             "MinIOMedia: access_key is empty. " *
             "Pass it explicitly or set MINIO_ACCESS_KEY."))
@@ -145,8 +127,7 @@ struct MinIOMedia <: iSourceMedia
             ENV["JULIA_SSL_NO_VERIFY_HOSTS"] = "**"
         end
 
-        aws_mod = Base.require(Main, :AWS)
-        creds   = aws_mod.AWSCredentials(access_key, secret_key)
+        creds   = AWS.AWSCredentials(access_key, secret_key)
         cfg     = _MinIOAWSConfig(endpoint, region, creds)
         clean   = rstrip(lstrip(prefix, '/'), '/')
         new(bucket, clean, format, cfg)
@@ -214,32 +195,27 @@ end
 # ──────────────────────────────────────────────────────────────────────────────
 
 function _s3_get_bytes(media::MinIOMedia, key::String)::Vector{UInt8}
-    awss3 = Base.require(Main, :AWSS3)
-    return awss3.s3_get(media._config, media.bucket, key; raw = true)
+    return AWSS3.s3_get(media._config, media.bucket, key; raw = true)
 end
 
 function _s3_put_bytes(media::MinIOMedia, key::String, data::Vector{UInt8};
                         content_type::String = "application/octet-stream")
-    awss3 = Base.require(Main, :AWSS3)
-    awss3.s3_put(media._config, media.bucket, key, data, content_type)
+    AWSS3.s3_put(media._config, media.bucket, key, data, content_type)
     return nothing
 end
 
 function _s3_exists(media::MinIOMedia, key::String)::Bool
-    awss3 = Base.require(Main, :AWSS3)
-    return awss3.s3_exists(media._config, media.bucket, key)
+    return AWSS3.s3_exists(media._config, media.bucket, key)
 end
 
 function _s3_list_keys(media::MinIOMedia, prefix::String)::Vector{String}
-    awss3 = Base.require(Main, :AWSS3)
-    objects = awss3.s3_list_objects(media._config, media.bucket, prefix; delimiter="")
+    objects = AWSS3.s3_list_objects(media._config, media.bucket, prefix; delimiter="")
     return [string(o["Key"]) for o in objects]
 end
 
 """Delete the object `key` from the media's bucket."""
 function _s3_delete(media::MinIOMedia, key::String)
-    awss3 = Base.require(Main, :AWSS3)
-    awss3.s3_delete(media._config, media.bucket, key)
+    AWSS3.s3_delete(media._config, media.bucket, key)
     return nothing
 end
 
@@ -439,9 +415,8 @@ Create the bucket referenced by `media` if it does not already exist.
 No-op if the bucket is already present.
 """
 function minio_create_bucket!(media::MinIOMedia)
-    awss3 = Base.require(Main, :AWSS3)
-    media.bucket in awss3.s3_list_buckets(media._config) ||
-        awss3.s3_create_bucket(media._config, media.bucket)
+    media.bucket in AWSS3.s3_list_buckets(media._config) ||
+        AWSS3.s3_create_bucket(media._config, media.bucket)
     return nothing
 end
 

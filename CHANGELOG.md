@@ -29,6 +29,7 @@
 - Objects get their content type from their name's extension (`application/vnd.apache.arrow.file` for Arrow), in `write_dataframe` and `write_dataset`.
 
 ### Fixed
+- `MinIOMedia` uses MyJuliaToolbox's own `AWSS3` and `AWS` (both in its `[deps]`): it loaded them from `Main`, so a project that loads MyJuliaToolbox without listing `AWSS3` (Mykonos's HcpPipeline, run by S6) failed at `MinIOMedia(...)` with "MinIOMedia requires AWSS3.jl". The lazy-load guard `_require_awss3` is gone.
 - `MinIOMedia`: `_s3_delete` was called but not defined, so `write_dataset`'s clean-up after a failed upload (`atomic=true`) deleted nothing, nor did the MinIO tests' clean-up; it now removes the objects.
 - README and the MinIO logger test passed `sink_kwargs=(batch_logs=false,)`, which `AsyncLogger` hands to the sink as one option named `sink_kwargs` (records stayed batched); they pass `batch_logs=false`.
 
