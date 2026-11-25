@@ -3,12 +3,6 @@
 ## Unreleased
 
 ### Added
-- Added pipeline runs for Mykonos (`src/pipeline.jl`): `open_zones`, `read_landing`, `run_step`, `set_output!`, `write_run`.
-  - `run_step` runs one step, named after its function, and writes the run's log (`steps.json`, the Dataset Tower's standard `mykonos.steps.v1`) in the run's prefix of the pipeline zone at the step's start and end; a failing step is recorded as `failed` and its error thrown again.
-  - `set_output!` sets a dataset's table inside the running step and records the set (time, step, field, table, rows, columns).
-  - `write_run` writes the dataset with `write_dataset` into `dataset/`, records each file's key, and refuses a table that no step set or that changed since its last set.
-  - `open_zones` gives the landing zone and the run's prefix as `MinIOMedia` from environment variables; `read_landing` reads the landing tables listed in `landing.json`.
-  - No new dependency.
 - Added `ArchiveMedia` media backend for reading and writing datasets as `.zip` or `.tar.gz` / `.tgz` archives.
   - `write_dataset(ArchiveMedia("out.zip"), dataset)` packs a dataset directory into a zip archive (atomic by default).
   - `read_dataset(ArchiveMedia("out.zip"))` / `read_dataset("out.zip")` extracts and reads back, auto-resolving the concrete type from `data_info.json`.
@@ -29,7 +23,7 @@
 - Objects get their content type from their name's extension (`application/vnd.apache.arrow.file` for Arrow), in `write_dataframe` and `write_dataset`.
 
 ### Fixed
-- `MinIOMedia` uses MyJuliaToolbox's own `AWSS3` and `AWS` (both in its `[deps]`): it loaded them from `Main`, so a project that loads MyJuliaToolbox without listing `AWSS3` (Mykonos's HcpPipeline, run by S6) failed at `MinIOMedia(...)` with "MinIOMedia requires AWSS3.jl". The lazy-load guard `_require_awss3` is gone.
+- `MinIOMedia` uses MyJuliaToolbox's own `AWSS3` and `AWS` (both in its `[deps]`): it loaded them from `Main`, so a project that loads MyJuliaToolbox without listing `AWSS3` (a pipeline project run in its own environment, for one) failed at `MinIOMedia(...)` with "MinIOMedia requires AWSS3.jl". The lazy-load guard `_require_awss3` is gone.
 - `MinIOMedia`: `_s3_delete` was called but not defined, so `write_dataset`'s clean-up after a failed upload (`atomic=true`) deleted nothing, nor did the MinIO tests' clean-up; it now removes the objects.
 - README and the MinIO logger test passed `sink_kwargs=(batch_logs=false,)`, which `AsyncLogger` hands to the sink as one option named `sink_kwargs` (records stayed batched); they pass `batch_logs=false`.
 
