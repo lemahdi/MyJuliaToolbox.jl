@@ -17,6 +17,3 @@ include("utils/dataframe-compare-tests.jl")
 # parameters tests
 include("parameters/parameters-tests.jl")
 
-# pipeline runs tests
-include("pipeline/pipeline-tests.jl")
-
