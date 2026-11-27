@@ -167,6 +167,7 @@ media = MinIOMedia(
     secret_key = ENV["MINIO_SECRET_KEY"],
     prefix     = "datasets/2025/q1",        # logical directory inside the bucket
     format     = :arrow,                    # default format for DataFrame I/O
+    part_size  = 64 * 1024^2,               # bytes per multipart part and per ranged GET (default; at least 5 MiB)
 )
 
 minio_create_bucket!(media)   # no-op if the bucket already exists
@@ -185,7 +186,13 @@ df = read_dataframe(media, "prices.arrow")
 df = read_dataframe(media; filename="prices.xlsx")
 ```
 
-An object holds what a local file of the same name holds: each call goes through `write_dataframe(path)` or `read_dataframe(path)` on a temporary file, so the formats (CSV, TSV, gzipped CSV, Arrow, Feather, Excel), their inference from the extension and the bytes are those of a `FileSystemMedia`. An Arrow object is in the Arrow file format, so a reader such as pyarrow's datasets reads it from its footer. The `format` keyword wins over the media's `format`, as for a `FileSystemMedia`; `atomic` is accepted (an object is put whole or not at all). Without `filename`, the object is the one whose key is the media's prefix.
+An object holds what a local file of the same name holds: the formats (CSV, TSV, gzipped CSV, Arrow, Feather, Excel), their inference from the extension and the bytes are those of a `FileSystemMedia`. An Arrow object is in the Arrow file format (one record batch, the same bytes as the file), so a reader such as pyarrow's datasets reads it from its footer. The `format` keyword wins over the media's `format`, as for a `FileSystemMedia`; `atomic` is accepted (an object is complete or absent: a failed upload is aborted). Without `filename`, the object is the one whose key is the media's prefix.
+
+Objects are streamed, with no temporary file:
+
+- **Writes** go through a buffer of `part_size` bytes. An object that fits in one buffer is put in one request; a larger one is a multipart upload, one part per full buffer, and one part uploads while the next fills, so at most `2 * part_size` bytes are buffered. Above 1,000 parts the part size doubles every 1,000 parts, to stay under S3's 10,000.
+- **Reads** take the object's size from a HEAD, then fetch it in ranged GETs of `part_size` bytes into one buffer of that size; Arrow is read straight from that buffer.
+- Each part and each ranged GET is logged (`@info` with `key, part, bytes, total_bytes, seconds, mib_s`), then one line per object with `parts, bytes, seconds`.
 
 ### Dataset I/O
 
@@ -201,9 +208,11 @@ dataset = read_dataset(MyDataSet, media)
 dataset = read_dataset(media)
 ```
 
-The full dataset structure — Arrow/CSV DataFrames, `data.json`, `data_info.json`, and nested `parameters/` files — is mirrored as S3 objects under `prefix/`.
+The full dataset structure — Arrow/CSV DataFrames, `data.json`, `data_info.json`, and nested `parameters/` files — is mirrored as S3 objects under `prefix/`, with the bytes a `FileSystemMedia` folder holds. Objects are written in this order: the tables (each streamed), then `parameters/`, then `data.json`, then `data_info.json` last, as the mark of a complete dataset. One LIST up front refuses existing keys unless `overwrite=true`, before anything is written.
 
-When `atomic=true` (default), a failed upload triggers best-effort deletion of already-uploaded objects so the bucket is not left in a partial state.
+When `atomic=true` (default), a failed write aborts the upload under way and deletes the objects it wrote; when it was overwriting, it also deletes the rest of the old dataset (root tables, `parameters/`, `data.json`, `data_info.json`), so the prefix holds no dataset rather than a mix of old and new objects. Nested prefixes (runs, logs) are never touched.
+
+`read_dataset` fetches only the root tables, `data.json`, `data_info.json` and `parameters/*.json`, one object at a time into memory: nested prefixes (other runs, logs) are not downloaded.
 
 ### Parameter I/O
 
@@ -223,9 +232,8 @@ MinIO has no native append — records are buffered in memory and flushed as a s
 logger = AsyncLogger(media; min_level=:info)
 log_info!(logger, "pipeline started"; metadata=(step="ingest",))
 log_warn!(logger, "slow query")
-stop_logger!(logger)
-
-minio_flush_log_buffer!(media)   # uploads one .jsonl object to {prefix}/logs/{date}/{ts}.jsonl
+minio_flush_log_buffer!(media)   # optional periodic flush: uploads one .jsonl object to {prefix}/logs/{date}/{ts}.jsonl
+stop_logger!(logger)             # uploads the records still buffered
 ```
 
 Pass `batch_logs=false` (`AsyncLogger(media; batch_logs=false)`, one of the sink options `AsyncLogger` hands to the sink) to write one object per record instead.

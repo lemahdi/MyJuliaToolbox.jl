@@ -67,13 +67,31 @@ struct MinIOTestDataSet <: iDataSet
 end
 
 # Helper — build a fresh MinIOMedia pointed at a unique test prefix
-function _test_media(prefix::String; format::Symbol = :auto)
+function _test_media(prefix::String; format::Symbol = :auto, part_size::Int = 64 * 1024^2)
     return MinIOMedia(_MINIO_BUCKET;
                 endpoint   = _MINIO_ENDPOINT,
                 access_key = _MINIO_ACCESS_KEY,
                 secret_key = _MINIO_SECRET_KEY,
                 prefix     = prefix,
-                format     = format)
+                format     = format,
+                part_size  = part_size)
+end
+
+# Multipart tests use the smallest part S3 allows, so a table of about 12 MiB goes in three parts
+const _SMALL_PART = 5 * 1024^2
+
+"""The number of parts a multipart object was uploaded in, from its ETag (`"<md5>-<parts>"`); 1 for a plain PUT."""
+function _uploaded_parts(media::MinIOMedia, key::String)
+    headers = MyJuliaToolbox.IO.AWSS3.s3_get_meta(media._config, media.bucket, key)
+    etag = strip(last(only(filter(header -> lowercase(first(header)) == "etag", collect(headers)))), '"')
+    return occursin('-', etag) ? parse(Int, last(split(etag, '-'))) : 1
+end
+
+"""Whether the bucket holds a multipart upload in progress for `key` (one begun and neither completed nor aborted)."""
+function _upload_in_progress(media::MinIOMedia, key::String)
+    response = MyJuliaToolbox.IO.AWSS3.S3.list_multipart_uploads(media.bucket, Dict{String, Any}("prefix" => key);
+                                                                aws_config = media._config)
+    return occursin("<UploadId>", String(copy(response.body)))
 end
 
 # Helper — delete every object under prefix (best-effort cleanup)
@@ -309,6 +327,78 @@ else
         end
     end
 
+    # ── Multipart streaming ────────────────────────────────────────────────────
+
+    large_df = DataFrame(id = collect(1:800_000), value = sin.(1:800_000))   # about 12 MiB as Arrow
+
+    @testset "multipart: an Arrow table in several parts, byte-identical to the local file" begin
+        prefix = "tests/$_RUN_ID/multipart_arrow"
+        media  = _test_media(prefix; part_size = _SMALL_PART)
+        try
+            write_dataframe(media, "large.arrow", large_df)
+            expected = _file_bytes("large.arrow", large_df)
+            @test length(expected) > 2 * _SMALL_PART
+            @test _uploaded_parts(media, "$prefix/large.arrow") == 3
+            @test MyJuliaToolbox.IO._s3_get_bytes(media, "$prefix/large.arrow") == expected
+            @test read_dataframe(media, "large.arrow") == large_df
+        finally
+            _cleanup(prefix)
+        end
+    end
+
+    @testset "multipart: CSV and gzipped CSV round-trip" begin
+        prefix = "tests/$_RUN_ID/multipart_csv"
+        media  = _test_media(prefix; part_size = _SMALL_PART)
+        try
+            write_dataframe(media, "large.csv", large_df)
+            @test _uploaded_parts(media, "$prefix/large.csv") >= 2
+            @test MyJuliaToolbox.IO._s3_get_bytes(media, "$prefix/large.csv") == _file_bytes("large.csv", large_df)
+            @test read_dataframe(media, "large.csv") == large_df
+            write_dataframe(media, "large.csv.gz", large_df)
+            @test read_dataframe(media, "large.csv.gz") == large_df
+        finally
+            _cleanup(prefix)
+        end
+    end
+
+    @testset "multipart: a failed write aborts its upload and leaves no object" begin
+        prefix = "tests/$_RUN_ID/multipart_abort"
+        media  = _test_media(prefix; part_size = _SMALL_PART)
+        key    = "$prefix/broken.bin"
+        try
+            @test_throws ErrorException MyJuliaToolbox.IO._stream_object(media, key; content_type = "application/octet-stream") do io
+                write(io, zeros(UInt8, 2 * _SMALL_PART + 1))
+                error("stop mid-write")
+            end
+            @test !MyJuliaToolbox.IO._s3_exists(media, key)
+            @test !_upload_in_progress(media, key)
+        finally
+            _cleanup(prefix)
+        end
+    end
+
+    @testset "multipart: a dataset round-trips; nested runs and logs are not read" begin
+        prefix = "tests/$_RUN_ID/multipart_dataset"
+        media  = _test_media(prefix; part_size = _SMALL_PART)
+        large_ds = MinIOTestDataSet(large_df, volumes_df, "large", test_params)
+        try
+            write_dataset(media, large_ds)
+            @test _uploaded_parts(media, "$prefix/prices.arrow") == 3
+            @test MyJuliaToolbox.IO._s3_get_bytes(media, "$prefix/prices.arrow") == _file_bytes("prices.arrow", large_df)
+            write_dataset(_test_media("$prefix/run1"), test_ds)                     # a nested run
+            write_dataframe(_test_media("$prefix/logs"), volumes_df; filename = "x.csv")
+
+            result = read_dataset(MinIOTestDataSet, media)
+            @test result.prices == large_df
+            @test result.volumes == volumes_df
+            @test result.tag == "large"
+            @test result.config == test_params
+            @test read_dataset(media) isa MinIOTestDataSet
+        finally
+            _cleanup(prefix)
+        end
+    end
+
     # ── Dataset I/O ────────────────────────────────────────────────────────────
 
     @testset "write_dataset — its tables are Arrow files" begin
@@ -440,11 +530,7 @@ else
             @test log_error!(logger, "error msg")
             stop_logger!(logger)
 
-            # nothing uploaded yet — records are buffered in memory
-            @test isempty(minio_list_objects(media))
-
-            # flush uploads one JSONL object
-            minio_flush_log_buffer!(media)
+            # stopping the logger uploads the buffered records as one JSONL object
             keys = minio_list_objects(media)
             @test length(keys) == 1
             @test endswith(keys[1], ".jsonl")
@@ -455,6 +541,10 @@ else
             @test occursin("info msg",   raw)
             @test occursin("warn msg",   raw)
             @test occursin("error msg",  raw)
+
+            # nothing left to flush
+            minio_flush_log_buffer!(media)
+            @test length(minio_list_objects(media)) == 1
         finally
             _cleanup(prefix)
         end
