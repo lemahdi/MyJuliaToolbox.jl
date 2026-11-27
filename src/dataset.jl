@@ -606,93 +606,236 @@ end
 
 # ──────────────────────────────────────────────────────────────────────────────
 # MinIOMedia support
+#
+# A dataset under a MinIO prefix P has a folder's layout: P/<field>.arrow|.csv for each non-empty DataFrame field,
+# P/parameters/<field>.json and P/parameters/params_N.json, P/data.json, P/data_info.json. Each object is streamed
+# from memory to the server and back: no temporary folder.
 # ──────────────────────────────────────────────────────────────────────────────
 
 """
-    _write_dataset_impl(source::IO.MinIOMedia, dataset::iDataSet; kwargs...)
+    _MinIODatasetPlan
 
-Write `dataset` to MinIO by serialising to a temporary local directory via
-`FileSystemMedia`, then uploading every produced file as an S3 object.
+What `write_dataset` puts under a MinIO prefix, in write order: the tables (key relative to the prefix => data frame),
+the parameter objects (relative key => parameters), then `data.json`'s payload, then `data_info.json` for
+`dataset_type`, last, as the mark of a complete dataset.
+"""
+struct _MinIODatasetPlan
+    tables::Vector{Pair{String, DataFrame}}
+    parameters::Vector{Pair{String, iParameters}}
+    payload::Dict{String, Any}
+    dataset_type::Type
+end
 
-When `atomic=true` (default), any upload failure triggers a best-effort
-deletion of already-uploaded keys so the bucket is not left partially written.
-S3/MinIO has no native multi-object atomic commit, so this is a cleanup
-heuristic rather than a true transaction.
+"""The reference `data.json` holds for parameters written as `parameters/<file_name>`."""
+function _dataset_parameter_reference(params::iParameters, file_name::String)
+    return Dict(
+        "__kind__" => _DATASET_PARAMETER_REF_KIND,
+        "type" => string(typeof(params)),
+        "file" => file_name,
+        "relative_path" => _DATASET_PARAMETERS_DIR,
+    )
+end
+
+"""
+    _minio_dataset_plan(dataset, type) -> _MinIODatasetPlan
+
+The objects `write_dataset(::FileSystemMedia)` would write as files, with the same names, `params_N` numbering and
+JSON payload, collected without writing anything.
+"""
+function _minio_dataset_plan(dataset::iDataSet, type::Symbol)
+    extension = type == :arrow ? "arrow" : "csv"
+    tables = Pair{String, DataFrame}[]
+    parameters = Pair{String, iParameters}[]
+    payload = Dict{String, Any}()
+    parameter_counter = Ref(0)
+    np_fields = Set(nonpersisted_fields(typeof(dataset)))
+    for field_name in fieldnames(typeof(dataset))
+        field_name in np_fields && continue
+        value = getfield(dataset, field_name)
+        if value isa DataFrame
+            nrow(value) == 0 && continue   # skip empty DataFrames — absent on read-back means empty
+            push!(tables, "$(field_name).$(extension)" => value)
+        elseif value isa iParameters
+            push!(parameters, "$(_DATASET_PARAMETERS_DIR)/$(field_name).json" => value)
+            if _parameters_field_needs_type_ref(fieldtype(typeof(dataset), field_name))
+                payload[string(field_name)] = _dataset_parameter_reference(value, "$(field_name).json")
+            end
+        else
+            payload[string(field_name)] = _dataset_to_json_value_collecting(value, parameters, parameter_counter)
+        end
+    end
+    return _MinIODatasetPlan(tables, parameters, payload, typeof(dataset))
+end
+
+"""
+    _dataset_to_json_value_collecting(value, parameters, parameter_counter)
+
+As `_dataset_to_json_value(value, ::FileSystemMedia, parameter_counter)`, but each nested `iParameters` is pushed to
+`parameters` as `parameters/params_N.json` instead of being written.
+"""
+function _dataset_to_json_value_collecting(value, parameters::Vector{Pair{String, iParameters}},
+                                           parameter_counter::Base.RefValue{Int})
+    if value === nothing
+        return nothing
+    elseif value isa iParameters
+        parameter_counter[] += 1
+        file_name = "params_$(parameter_counter[]).json"
+        push!(parameters, "$(_DATASET_PARAMETERS_DIR)/$(file_name)" => value)
+        return _dataset_parameter_reference(value, file_name)
+    elseif value isa AbstractVector
+        return [_dataset_to_json_value_collecting(item, parameters, parameter_counter) for item in value]
+    elseif value isa AbstractDict
+        converted = Dict{String, Any}()
+        for (key, item) in value
+            converted[string(key)] = _dataset_to_json_value_collecting(item, parameters, parameter_counter)
+        end
+        return converted
+    elseif isstructtype(typeof(value)) && !(value isa Number) && !(value isa AbstractString) && !(value isa Symbol)
+        converted = Dict{String, Any}()
+        for field_name in fieldnames(typeof(value))
+            converted[string(field_name)] =
+                _dataset_to_json_value_collecting(getfield(value, field_name), parameters, parameter_counter)
+        end
+        return converted
+    elseif value isa Symbol
+        return string(value)
+    else
+        return value
+    end
+end
+
+"""The bytes of `payload` as JSON, as the folder writes `data.json` and `data_info.json`."""
+function _dataset_json_bytes(payload::AbstractDict; pretty::Bool)
+    buffer = IOBuffer()
+    if pretty
+        JSON.print(buffer, payload, 2)
+    else
+        JSON.print(buffer, payload)
+    end
+    return take!(buffer)
+end
+
+"""What `data_info.json` holds for `dataset_type`, as `_write_dataset_info` writes it."""
+_dataset_info_payload(dataset_type::Type) = Dict(
+    "__kind__" => _DATASET_INFO_KIND,
+    "dataset_type" => string(dataset_type),
+)
+
+"""`source.prefix` followed by `/`, or empty for the bucket root: the start of every key under the prefix."""
+_minio_search_prefix(source::IO.MinIOMedia) = isempty(source.prefix) ? "" : source.prefix * "/"
+
+"""The part of `key` after `source`'s prefix, or `nothing` for a key outside it."""
+function _minio_relative_key(source::IO.MinIOMedia, key::AbstractString)
+    search_prefix = _minio_search_prefix(source)
+    startswith(key, search_prefix) || return nothing
+    return String(key[length(search_prefix)+1:end])
+end
+
+"""The keys `plan` writes, in write order."""
+function _minio_planned_keys(source::IO.MinIOMedia, plan::_MinIODatasetPlan)
+    relative_keys = vcat(first.(plan.tables), first.(plan.parameters), ["data.json", _DATASET_INFO_FILE])
+    return [IO._minio_key(source, relative_key) for relative_key in relative_keys]
+end
+
+"""
+    _write_minio_dataset_objects!(written, source, plan; type, pretty)
+
+Write `plan`'s objects in order: each table streamed (multipart once it outgrows the part size), then the
+parameters, `data.json` and `data_info.json`, each in one PUT. Each key goes into `written` once its object is.
+"""
+function _write_minio_dataset_objects!(written::Vector{String}, source::IO.MinIOMedia, plan::_MinIODatasetPlan;
+                                       type::Symbol, pretty::Bool)
+    for (relative_key, table) in plan.tables
+        key = IO._minio_key(source, relative_key)
+        IO._stream_object(source, key; content_type = IO._minio_content_type(relative_key)) do io
+            IO._write_dataframe_stream(io, relative_key, table; format = type)
+        end
+        push!(written, key)
+    end
+    json_objects = vcat(
+        [relative_key => _parameters_json_bytes(params; pretty = pretty) for (relative_key, params) in plan.parameters],
+        ["data.json" => _dataset_json_bytes(plan.payload; pretty = pretty),
+         _DATASET_INFO_FILE => _dataset_json_bytes(_dataset_info_payload(plan.dataset_type); pretty = pretty)],
+    )
+    for (relative_key, bytes) in json_objects
+        key = IO._minio_key(source, relative_key)
+        IO._s3_put_bytes(source, key, bytes; content_type = "application/json")
+        push!(written, key)
+    end
+    return written
+end
+
+"""
+Whether `key` is part of a dataset's layout under `source`'s prefix: a root table (`.arrow` or `.csv`), `data.json`,
+`data_info.json`, or a JSON object directly under `parameters/`. Nested prefixes (runs, logs) are not.
+"""
+function _is_minio_dataset_layout_key(source::IO.MinIOMedia, key::AbstractString)
+    relative_key = _minio_relative_key(source, key)
+    isnothing(relative_key) && return false
+    parts = split(relative_key, '/')
+    if length(parts) == 1
+        return relative_key in ("data.json", _DATASET_INFO_FILE) ||
+               lowercase(splitext(relative_key)[2]) in (".arrow", ".csv")
+    end
+    return length(parts) == 2 && parts[1] == _DATASET_PARAMETERS_DIR && endswith(lowercase(parts[2]), ".json")
+end
+
+"""
+    _remove_failed_minio_dataset(source, written, replaced_keys)
+
+After a failed atomic write, delete what the call wrote and the old dataset's layout among `replaced_keys` (the keys
+present before an overwrite), so the prefix holds no dataset rather than a mix of old and new objects. Deletion errors
+are logged, not thrown: the write's error is the one to report.
+"""
+function _remove_failed_minio_dataset(source::IO.MinIOMedia, written::Vector{String}, replaced_keys::Set{String})
+    old_layout = filter(key -> _is_minio_dataset_layout_key(source, key), replaced_keys)
+    doomed = sort!(collect(union(Set(written), old_layout)))
+    for key in doomed
+        try
+            IO._s3_delete(source, key)
+        catch delete_error
+            @warn "MinIO: could not delete an object of the failed dataset write" key exception = delete_error
+        end
+    end
+    @warn "write_dataset to MinIO failed; removed the partial dataset" bucket = source.bucket prefix = source.prefix objects_deleted = length(doomed)
+    return nothing
+end
+
+"""
+    _write_dataset_impl(source::IO.MinIOMedia, dataset::iDataSet; type, overwrite, atomic, pretty)
+
+Write `dataset` under the media's prefix with a folder's layout, each object streamed from memory (no temporary
+folder): the tables first, then `parameters/`, then `data.json`, then `data_info.json` last, as the mark of a complete
+dataset.
+
+One LIST up front refuses keys that already exist unless `overwrite`, before anything is written. With `atomic=true`
+(default), a failure aborts the upload under way, deletes the objects this call wrote and, when overwriting, the rest
+of the old dataset (root tables, `parameters/`, `data.json`, `data_info.json`): the prefix is left with no dataset
+rather than a mix of old and new objects. Nested prefixes (runs, logs) are never touched. S3 has no multi-object
+commit, so a reader during the write can see a partial dataset; it lacks `data_info.json` until the end.
 """
 function _write_dataset_impl(source::IO.MinIOMedia, dataset::iDataSet;
                               type::Symbol    = :arrow,
                               overwrite::Bool = false,
                               atomic::Bool    = true,
                               pretty::Bool    = true)
-    type in (:arrow, :csv) || throw(ArgumentError(
-        "Unsupported dataset type: $type. Supported: :arrow, :csv."))
-
-    tmp_dir = mktempdir()
-    try
-        _write_dataset_impl(IO.FileSystemMedia(tmp_dir), dataset;
-                            type=type, overwrite=true, atomic=false, pretty=pretty)
-
-        uploaded = String[]
-        try
-            for (root, _, files) in walkdir(tmp_dir)
-                for fname in files
-                    local_path   = joinpath(root, fname)
-                    rel_path     = replace(relpath(local_path, tmp_dir), '\\' => '/')
-                    key          = IO._minio_key(source, rel_path)
-
-                    if !overwrite && IO._s3_exists(source, key)
-                        throw(ArgumentError(
-                            "Object already exists: $key. Pass overwrite=true to overwrite."))
-                    end
-
-                    content_type = IO._minio_content_type(fname)
-                    IO._s3_put_bytes(source, key, read(local_path); content_type)
-                    push!(uploaded, key)
-                end
-            end
-        catch
-            if atomic
-                for key in uploaded
-                    try IO._s3_delete(source, key) catch; end
-                end
-            end
-            rethrow()
+    _check_dataset_type(type)
+    plan = _minio_dataset_plan(dataset, type)
+    existing_keys = Set(IO._s3_list_keys(source, _minio_search_prefix(source)))
+    if !overwrite
+        for key in _minio_planned_keys(source, plan)
+            key in existing_keys && throw(ArgumentError(
+                "Object already exists: $key. Pass overwrite=true to overwrite."))
         end
-    finally
-        rm(tmp_dir; recursive=true, force=true)
+    end
+    written = String[]
+    try
+        _write_minio_dataset_objects!(written, source, plan; type = type, pretty = pretty)
+    catch
+        atomic && _remove_failed_minio_dataset(source, written, overwrite ? existing_keys : Set{String}())
+        rethrow()
     end
     return nothing
-end
-
-"""
-    _with_downloaded_prefix(read_folder, source::IO.MinIOMedia)
-
-Download every object under `source.prefix` into a temporary folder, each at its path relative to the prefix, and
-return `read_folder(folder)`, called while the folder exists; the folder is removed after. Throws `ArgumentError` when
-the prefix holds no object.
-"""
-function _with_downloaded_prefix(read_folder::Function, source::IO.MinIOMedia)
-    search_prefix = isempty(source.prefix) ? "" : source.prefix * "/"
-    all_keys      = IO._s3_list_keys(source, search_prefix)
-
-    isempty(all_keys) && throw(ArgumentError(
-        "No objects found at bucket=$(source.bucket), prefix=$(repr(source.prefix)). " *
-        "Has the dataset been written yet?"))
-
-    tmp_dir = mktempdir()
-    try
-        for key in all_keys
-            rel  = isempty(source.prefix) ? key :
-                   startswith(key, search_prefix) ? key[length(search_prefix)+1:end] : key
-            dest = joinpath(tmp_dir, replace(rel, '/' => Base.Filesystem.path_separator[1]))
-            mkpath(dirname(dest))
-            write(dest, IO._s3_get_bytes(source, key))
-        end
-        return read_folder(tmp_dir)
-    finally
-        GC.gc()
-        rm(tmp_dir; recursive=true, force=true)
-    end
 end
 
 """Refuse a dataset type other than `:arrow` and `:csv`, as the folder reads do."""
@@ -702,35 +845,147 @@ function _check_dataset_type(type::Symbol)
 end
 
 """
+    _fetch_minio_dataset(source, type, skip_tables) -> (tables, json_texts)
+
+The dataset under the media's prefix, fetched object by object as a folder read reads files: the root tables of
+`type` (each read into a data frame before the next is fetched; fields in `skip_tables` are not fetched),
+`data.json`, `data_info.json` and `parameters/*.json` (as text, keyed by their path relative to the prefix). Nested
+prefixes (runs, logs) are never fetched. Throws `ArgumentError` when the prefix holds none of these objects.
+"""
+function _fetch_minio_dataset(source::IO.MinIOMedia, type::Symbol, skip_tables::Set{Symbol})
+    search_prefix = _minio_search_prefix(source)
+    root_keys = IO._s3_list_level(source, search_prefix)
+    parameter_keys = IO._s3_list_level(source, search_prefix * _DATASET_PARAMETERS_DIR * "/")
+    table_extension = type == :arrow ? ".arrow" : ".csv"
+    tables = Dict{Symbol, DataFrame}()
+    json_texts = Dict{String, String}()
+    for key in root_keys
+        relative_key = _minio_relative_key(source, key)
+        (isnothing(relative_key) || occursin('/', relative_key)) && continue
+        if lowercase(splitext(relative_key)[2]) == table_extension
+            field_name = Symbol(splitext(relative_key)[1])
+            field_name in skip_tables && continue
+            tables[field_name] = IO._dataframe_from_bytes(relative_key, IO._s3_get_bytes(source, key); format = type)
+        elseif relative_key in ("data.json", _DATASET_INFO_FILE)
+            json_texts[relative_key] = String(IO._s3_get_bytes(source, key))
+        end
+    end
+    for key in parameter_keys
+        relative_key = _minio_relative_key(source, key)
+        (isnothing(relative_key) || !endswith(lowercase(relative_key), ".json")) && continue
+        json_texts[relative_key] = String(IO._s3_get_bytes(source, key))
+    end
+    isempty(tables) && isempty(json_texts) && throw(ArgumentError(
+        "No dataset objects found at bucket=$(source.bucket), prefix=$(repr(source.prefix)). " *
+        "Has the dataset been written yet?"))
+    return tables, json_texts
+end
+
+"""The attributes a folder read gives: the tables, and `data.json`'s entries with parameter references resolved."""
+function _minio_dataset_attributes(tables::Dict{Symbol, DataFrame}, json_texts::Dict{String, String})
+    attributes = Dict{Symbol, Any}(field_name => table for (field_name, table) in tables)
+    if haskey(json_texts, "data.json")
+        for (key, value) in JSON.parse(json_texts["data.json"])
+            attributes[Symbol(key)] = _dataset_decode_json_value_zip(value, json_texts)
+        end
+    end
+    return attributes
+end
+
+"""
+The concrete dataset type `data_info.json` declares, as `_read_dataset_declared_type` reads it from a folder:
+`nothing` without the object or a declared type; a type that cannot be resolved, or is not a concrete `iDataSet`, is
+refused.
+"""
+function _minio_declared_dataset_type(json_texts::Dict{String, String})
+    haskey(json_texts, _DATASET_INFO_FILE) || return nothing
+    info = JSON.parse(json_texts[_DATASET_INFO_FILE])
+    info isa AbstractDict || return nothing
+    haskey(info, "dataset_type") || return nothing
+    kind = haskey(info, "__kind__") ? string(info["__kind__"]) : _DATASET_INFO_KIND
+    kind == _DATASET_INFO_KIND || return nothing
+    resolved = _dataset_resolve_type_from_name(string(info["dataset_type"]))
+    resolved <: iDataSet || throw(ArgumentError("Resolved dataset type $(resolved) is not a subtype of iDataSet."))
+    Base.isconcretetype(resolved) || throw(ArgumentError("Resolved dataset type $(resolved) must be concrete."))
+    return resolved
+end
+
+"""
+    _minio_parameters_field(field_type, field_name, json_texts) -> (found, value)
+
+As `_try_load_parameters_field` for a folder: an `iParameters` field from `parameters/<field>.json`; a nullable one
+without its object is `nothing`; any other field is not found.
+"""
+function _minio_parameters_field(::Type{T}, field_name::Symbol, json_texts::Dict{String, String}) where {T <: iParameters}
+    text = get(json_texts, "$(_DATASET_PARAMETERS_DIR)/$(field_name).json", nothing)
+    isnothing(text) && return (false, nothing)
+    Base.isconcretetype(T) || throw(ArgumentError("Cannot deserialize abstract iParameters field type $(T) for field '$field_name'. Use a concrete subtype."))
+    return (true, parameters_from_dict(T, JSON.parse(text)))
+end
+
+function _minio_parameters_field(::Type{Union{Nothing, S}}, field_name::Symbol,
+                                 json_texts::Dict{String, String}) where {S <: iParameters}
+    text = get(json_texts, "$(_DATASET_PARAMETERS_DIR)/$(field_name).json", nothing)
+    isnothing(text) && return (true, nothing)
+    Base.isconcretetype(S) || throw(ArgumentError("Cannot deserialize abstract iParameters field type $(S) for field '$field_name'. Use a concrete subtype."))
+    return (true, parameters_from_dict(S, JSON.parse(text)))
+end
+
+_minio_parameters_field(::Type, ::Symbol, ::Dict{String, String}) = (false, nothing)
+
+"""Add to `attributes` the `iParameters` fields of `T` that `data.json` does not hold, from `parameters/`."""
+function _add_minio_parameters_fields!(attributes::Dict{Symbol, Any}, ::Type{T},
+                                       json_texts::Dict{String, String}) where {T <: iDataSet}
+    np_fields = Set{Symbol}(nonpersisted_fields(T))
+    for field_name in fieldnames(T)
+        (haskey(attributes, field_name) || field_name in np_fields) && continue
+        found, value = _minio_parameters_field(fieldtype(T, field_name), field_name, json_texts)
+        found && (attributes[field_name] = value)
+    end
+    return attributes
+end
+
+"""
     _read_dataset_impl(source::IO.MinIOMedia; type=:arrow) -> LoadedDataSet
 
-The objects under `source.prefix` downloaded to a temporary folder, then read as a `FileSystemMedia`.
+The root tables and `data.json` under the media's prefix, read as a folder's: no type resolution.
 """
 function _read_dataset_impl(source::IO.MinIOMedia; type::Symbol = :arrow)
     _check_dataset_type(type)
-    return _with_downloaded_prefix(folder -> _read_dataset_impl(IO.FileSystemMedia(folder); type=type), source)
+    tables, json_texts = _fetch_minio_dataset(source, type, Set{Symbol}())
+    return LoadedDataSet(_minio_dataset_attributes(tables, json_texts))
 end
 
 """
     read_dataset(source::IO.MinIOMedia; type=:arrow)
 
-Read the dataset under the media's prefix as `read_dataset(::FileSystemMedia)` reads a folder: the objects are
-downloaded to a temporary folder first, so the concrete type comes from `data_info.json` and each `iParameters` field
-from `parameters/`, as for a folder (a type that cannot be resolved is refused, as for a folder).
+Read the dataset under the media's prefix as `read_dataset(::FileSystemMedia)` reads a folder: the concrete type comes
+from `data_info.json` and each `iParameters` field from `parameters/` (a type that cannot be resolved is refused, as
+for a folder). Only the root tables, the two JSON objects and `parameters/*.json` are fetched, one object at a time,
+into memory: nested prefixes (runs, logs) are not.
 """
 function read_dataset(source::IO.MinIOMedia; type::Symbol = :arrow)
     _check_dataset_type(type)
-    return _with_downloaded_prefix(folder -> read_dataset(IO.FileSystemMedia(folder); type=type), source)
+    tables, json_texts = _fetch_minio_dataset(source, type, Set{Symbol}())
+    attributes = _minio_dataset_attributes(tables, json_texts)
+    declared_type = _minio_declared_dataset_type(json_texts)
+    isnothing(declared_type) && return LoadedDataSet(attributes)
+    _add_minio_parameters_fields!(attributes, declared_type, json_texts)
+    return _dataset_from_attributes(declared_type, attributes, source)
 end
 
 """
     read_dataset(::Type{T}, source::IO.MinIOMedia; type=:arrow)
 
-Typed variant: the dataset under the media's prefix read as `read_dataset(T, ::FileSystemMedia)` reads a folder.
+Typed variant: the dataset under the media's prefix read as `read_dataset(T, ::FileSystemMedia)` reads a folder; the
+tables of `nonpersisted_fields(T)` are not fetched.
 """
 function read_dataset(::Type{T}, source::IO.MinIOMedia; type::Symbol = :arrow) where {T <: iDataSet}
     _check_dataset_type(type)
-    return _with_downloaded_prefix(folder -> read_dataset(T, IO.FileSystemMedia(folder); type=type), source)
+    tables, json_texts = _fetch_minio_dataset(source, type, Set{Symbol}(nonpersisted_fields(T)))
+    attributes = _minio_dataset_attributes(tables, json_texts)
+    _add_minio_parameters_fields!(attributes, T, json_texts)
+    return _dataset_from_attributes(T, attributes, source)
 end
 
 function _dataset_to_json_value(value)

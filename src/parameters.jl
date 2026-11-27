@@ -343,11 +343,24 @@ function _write_parameters_impl(source::IO.MinIOMedia,
     !overwrite && IO._s3_exists(source, key) && throw(ArgumentError(
         "Object already exists: $key. Pass overwrite=true to overwrite."))
 
-    json_str = pretty ? JSON.json(_parameter_to_json_value(params), 2) :
-                        JSON.json(_parameter_to_json_value(params))
-    IO._s3_put_bytes(source, key, Vector{UInt8}(json_str);
+    IO._s3_put_bytes(source, key, _parameters_json_bytes(params; pretty = pretty);
                      content_type = "application/json")
     return nothing
+end
+
+"""
+    _parameters_json_bytes(params; pretty=true) -> Vector{UInt8}
+
+The bytes `write_parameters(path, params)` writes into a JSON file: what a MinIO parameters object holds.
+"""
+function _parameters_json_bytes(params::iParameters; pretty::Bool = true)
+    buffer = IOBuffer()
+    if pretty
+        JSON.print(buffer, _parameter_to_json_value(params), 2)
+    else
+        JSON.print(buffer, _parameter_to_json_value(params))
+    end
+    return take!(buffer)
 end
 
 function _read_parameters_impl(::Type{T},

@@ -331,13 +331,23 @@ function flush_logger!(logger::AsyncLogger)
 end
 
 """
+    _finalize_log_sink(source::iSourceMedia)
+
+What a sink does once the logger has stopped and every record has reached it: nothing for most sinks; a sink that
+buffers records (`MinIOMedia`) uploads them.
+"""
+_finalize_log_sink(::iSourceMedia) = nothing
+
+"""
     stop_logger!(logger::AsyncLogger)
 
-Close the logger queue and wait for the background worker to finish.
+Close the logger queue, wait for the background worker to finish, then let the sink finish its work (a `MinIOMedia`
+sink uploads its buffered records).
 """
 function stop_logger!(logger::AsyncLogger)
     _close_queue!(logger.queue)
     wait(logger.worker)
+    _finalize_log_sink(logger.source)
     return nothing
 end
 
